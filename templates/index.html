@@ -25,11 +25,16 @@
       margin: 0;
       font-size: 2em;
     }
+    .summary {
+      text-align: center;
+      font-size: 1.2em;
+      margin: 10px 0;
+    }
     table {
       border-collapse: collapse;
       width: 90%;
       max-width: 900px;
-      margin: 20px auto;
+      margin: 0 auto 20px;
       background: rgba(255,255,255,0.1);
       box-shadow: 0 0 10px rgba(0,0,0,0.2);
     }
@@ -60,16 +65,20 @@
     <h1>Статистика работы КЦ за {{ today }}</h1>
   </header>
 
+  <div class="summary" id="new-numbers">
+    <!-- Сюда будет вставлено: "Новых номеров – X" -->
+  </div>
+
   <table>
     <thead>
       <tr>
         <th>Оператор</th>
-        <th>Статус оператора</th>
+        <th>Статус</th>
         <th>Всего звонков</th>
-        <th>Количествово состоявшихся диалогов</th>
-        <th>Количество звонков с результатом "Соглсие на встречу"</th>
-        <th>Количество звонков с результатом "Перевод"</th>
-        <th>Среднее время разговора, сек</th>
+        <th>Диалогов</th>
+        <th>Согласие</th>
+        <th>Перевод</th>
+        <th>Среднее, сек</th>
       </tr>
     </thead>
     <tbody id="stats-body"></tbody>
@@ -81,28 +90,33 @@
 
   <script>
     async function loadStats() {
-      const res  = await fetch('/stats');
-      const data = await res.json();
+      const res   = await fetch('/stats');
+      const data  = await res.json();
       const tbody = document.getElementById('stats-body');
       tbody.innerHTML = '';
 
+      // выводим общее число новых номеров
+      document.getElementById('new-numbers').textContent =
+        `Новых номеров – ${data.new}`;
+
       Object.entries(data.operators).forEach(([id,name]) => {
-        const label = data.status[id] || '-';
         const all   = data.all[id]   || 0;
-        const cs8   = data.cs8[id]   || 0;
+        const total = data.total[id] || 0;
         const cs20  = data.cs20[id]  || 0;
-        const tot   = data.total[id] || 0;
+        const cs8   = data.cs8[id]   || 0;
         const avg   = data.avg[id]   || 0;
-        if (label==='-' && all===0 && cs8===0 && cs20===0 && tot===0 && avg===0) return;
+        if (all===0 && total===0 && cs20===0 && cs8===0 && avg===0) return;
+
+        const st = data.status[id] || '-';
 
         tbody.insertAdjacentHTML('beforeend', `
           <tr>
             <td>${name}</td>
-            <td>${label}</td>
+            <td>${st}</td>
             <td>${all}</td>
-            <td>${cs8}</td>
+            <td>${total}</td>
             <td>${cs20}</td>
-            <td>${tot}</td>
+            <td>${cs8}</td>
             <td>${avg}</td>
           </tr>
         `);
