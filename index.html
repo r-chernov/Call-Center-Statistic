@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Статистика работы КЦ за {{ today }}</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      color: #fff;
+      background: linear-gradient(45deg, #a8e063, #56ab2f, #8ec5fc);
+      background-size: 400% 400%;
+      animation: GradientBG 15s ease infinite;
+    }
+    @keyframes GradientBG {
+      0%   { background-position:   0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position:   0% 50%; }
+    }
+    header {
+      text-align: center;
+      padding: 20px;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 2em;
+    }
+    .summary {
+      text-align: center;
+      font-size: 1.2em;
+      margin: 10px 0;
+    }
+    table {
+      border-collapse: collapse;
+      width: 90%;
+      max-width: 900px;
+      margin: 0 auto 20px;
+      background: rgba(255,255,255,0.1);
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+    }
+    th, td {
+      border: 1px solid rgba(255,255,255,0.3);
+      padding: 8px 12px;
+      text-align: center;
+      word-break: break-word;
+    }
+    th {
+      background: rgba(0,0,0,0.2);
+    }
+    tbody tr:hover {
+      background: rgba(0,0,0,0.2);
+    }
+    .logo-container {
+      text-align: center;
+      margin: 20px 0;
+    }
+    .logo-container img {
+      width: 300px;
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Статистика работы КЦ за {{ today }}</h1>
+  </header>
+
+  <div class="summary" id="new-numbers">
+    <!-- Сюда будет вставлено: "Новых номеров – X" -->
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Оператор</th>
+        <th>Статус</th>
+        <th>Всего звонков</th>
+        <th>Диалогов</th>
+        <th>Согласие</th>
+        <th>Перевод</th>
+        <th>Среднее, сек</th>
+      </tr>
+    </thead>
+    <tbody id="stats-body"></tbody>
+  </table>
+
+  <div class="logo-container">
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="Логотип">
+  </div>
+
+  <script>
+    async function loadStats() {
+      const res   = await fetch('/stats');
+      const data  = await res.json();
+      const tbody = document.getElementById('stats-body');
+      tbody.innerHTML = '';
+
+      // выводим общее число новых номеров
+      document.getElementById('new-numbers').textContent =
+        `Новых номеров – ${data.new}`;
+
+      Object.entries(data.operators).forEach(([id,name]) => {
+        const all   = data.all[id]   || 0;
+        const total = data.total[id] || 0;
+        const cs20  = data.cs20[id]  || 0;
+        const cs8   = data.cs8[id]   || 0;
+        const avg   = data.avg[id]   || 0;
+        if (all===0 && total===0 && cs20===0 && cs8===0 && avg===0) return;
+
+        const st = data.status[id] || '-';
+
+        tbody.insertAdjacentHTML('beforeend', `
+          <tr>
+            <td>${name}</td>
+            <td>${st}</td>
+            <td>${all}</td>
+            <td>${total}</td>
+            <td>${cs20}</td>
+            <td>${cs8}</td>
+            <td>${avg}</td>
+          </tr>
+        `);
+      });
+    }
+
+    loadStats();
+    setInterval(loadStats, 3000);
+  </script>
+</body>
+</html>
