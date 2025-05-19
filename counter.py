@@ -21,7 +21,7 @@ HEADERS          = {"Authorization": API_TOKEN, "Accept": "application/json"}
 
 # === Telegram Bot ===
 BOT_TOKEN = "7657704358:AAHby9X8__-T0Hbvao3H0HQi5OdncyGoAJQ"
-CHAT_ID   = 758234101
+CHAT_ID   = [758234101, 1906635370]
 bot = Bot(token=BOT_TOKEN)
 
 # === Операторы и статус-маппинг ===
@@ -112,7 +112,14 @@ def fetch_current_status():
 
 def fetch_new_numbers_total():
     # за всё время — фильтр только по статусу 1 (новый контакт)
-    r = requests.get(CONTACT_LIST_URL, params=[("statuses[]","1"), ("page",1), ("limit",1)], headers=HEADERS)
+    params = [
+                ("statuses[]", "1"),
+                ("campaign_ids[]", "67"),
+                ("campaign_ids[]", "70"),
+                ("page", 1),
+                ("limit", 1),
+        ]
+    r = requests.get(CONTACT_LIST_URL, params=params, headers=HEADERS)
     r.raise_for_status()
     data = r.json()
     # если API возвращает totalCount — используем его, иначе длину items
@@ -148,8 +155,10 @@ def send_report():
             f"Средн. время:    {avg.get(oid,0)}"
         )
     text = "\n\n".join(lines)
-    asyncio.run(bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown"))
-
+    for cid in CHAT_ID:
+            asyncio.run(
+                        bot.send_message(chat_id=cid, text=text, parse_mode="Markdown")
+            )
 sched = BackgroundScheduler(timezone="Europe/Samara")
 sched.add_job(send_report, 'cron', hour=18, minute=30)
 sched.start()
