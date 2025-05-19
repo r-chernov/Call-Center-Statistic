@@ -21,7 +21,7 @@ HEADERS          = {"Authorization": API_TOKEN, "Accept": "application/json"}
 
 # === Telegram Bot ===
 BOT_TOKEN = "7657704358:AAHby9X8__-T0Hbvao3H0HQi5OdncyGoAJQ"
-CHAT_ID   = [758234101, 1906635370]
+CHAT_ID   = [758234101, 1906635370, 1930885085]
 bot = Bot(token=BOT_TOKEN)
 
 # === Операторы и статус-маппинг ===
