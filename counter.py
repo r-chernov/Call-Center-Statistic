@@ -198,5 +198,13 @@ def stats():
         "new":       new_tot
     })
 
+@app.route('/send_report')
+def trigger_report():
+    try:
+        send_report()
+        return jsonify({"status": "success", "message": "Отчет успешно отправлен"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Ошибка при отправке отчета: {str(e)}"}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
