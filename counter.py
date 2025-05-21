@@ -122,6 +122,7 @@ def fetch_new_numbers_total():
     return data.get("totalCount", len(data.get("items", [])))
 
 def send_report():
+    print(f"Starting report generation at {datetime.now(pytz.timezone('Europe/Samara'))}")
     total = fetch_counts(STAT_FULL)
     cs8   = fetch_counts(CS8)
     cs20  = fetch_counts(CS20)
@@ -155,14 +156,25 @@ def send_report():
     # Отправка в все чаты последовательно
     for cid in CHAT_ID:
         try:
+            print(f"Sending report to chat {cid}")
             asyncio.run(bot.send_message(chat_id=cid, text=text, parse_mode="Markdown"))
+            print(f"Successfully sent report to chat {cid}")
         except Exception as e:
             print(f"Ошибка отправки в чат {cid}: {str(e)}")
+    
+    print("Report generation and sending completed")
 
 # Настраиваем планировщик для отправки отчета каждый день в 18:30
-sched = BackgroundScheduler(timezone="Europe/Samara")
-sched.add_job(send_report, 'cron', hour=18, minute=30)
-sched.start()
+sched = None
+def init_scheduler():
+    global sched
+    if sched is None:
+        sched = BackgroundScheduler(timezone="Europe/Samara")
+        sched.add_job(send_report, 'cron', hour=18, minute=30)
+        sched.start()
+
+# Инициализируем планировщик при запуске
+init_scheduler()
 
 @app.route('/')
 def index():
