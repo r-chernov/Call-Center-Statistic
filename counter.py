@@ -67,6 +67,7 @@ def build_base_params():
         params.append(("operators[]", op))
     return params
 
+
 def fetch_counts(status_list):
     params = build_base_params() + ALL_CALLS_PARAMS
     for s in status_list:
@@ -80,8 +81,10 @@ def fetch_counts(status_list):
             cnt[oid] += 1
     return cnt
 
+
 def fetch_all_counts():
     return fetch_counts([])
+
 
 def fetch_all_calls_details():
     params = build_base_params() + ALL_CALLS_PARAMS
@@ -89,8 +92,8 @@ def fetch_all_calls_details():
     r.raise_for_status()
     return r.json().get("items", [])
 
+
 def fetch_current_status():
-    # история
     params = build_base_params() + [("page",1),("limit",1000)]
     r1 = requests.get(HIST_URL, params=params, headers=HEADERS); r1.raise_for_status()
     r2 = requests.get(LIST_URL, params=params, headers=HEADERS); r2.raise_for_status()
@@ -103,23 +106,22 @@ def fetch_current_status():
         oid = str(ev.get("id") or "")
         if oid in OPERATORS and ev.get("event"):
             status[oid] = ev["event"]
-    # переведём
     return {oid: STATUS_MAP.get(st, st) for oid,st in status.items()}
 
+
 def fetch_new_numbers_total():
-    # за всё время — фильтр только по статусу 1 (новый контакт)
     params = [
-                ("statuses[]", "1"),
-                ("campaign_ids[]", "67"),
-                ("campaign_ids[]", "70"),
-                ("page", 1),
-                ("limit", 1),
-        ]
+        ("statuses[]", "1"),
+        ("campaign_ids[]", "67"),
+        ("campaign_ids[]", "70"),
+        ("page", 1),
+        ("limit", 1),
+    ]
     r = requests.get(CONTACT_LIST_URL, params=params, headers=HEADERS)
     r.raise_for_status()
     data = r.json()
-    # если API возвращает totalCount — используем его, иначе длину items
     return data.get("totalCount", len(data.get("items", [])))
+
 
 def send_report():
     print(f"Starting report generation at {datetime.now(pytz.timezone('Europe/Samara'))}")
@@ -138,7 +140,6 @@ def send_report():
             cnts[oid] += 1
     avg = {oid:(sums[oid]//cnts[oid] if cnts[oid] else 0) for oid in OPERATORS}
 
-    # единое сообщение в Telegram
     tz    = pytz.timezone("Europe/Samara")
     today = datetime.now(tz).strftime("%d.%m.%Y")
     lines = [f"*Отчёт КЦ за {today}*"]
@@ -152,8 +153,6 @@ def send_report():
             f"Средн. время:    {avg.get(oid,0)}"
         )
     text = "\n\n".join(lines)
-    
-    # Отправка в все чаты последовательно
     for cid in CHAT_ID:
         try:
             print(f"Sending report to chat {cid}")
@@ -161,20 +160,16 @@ def send_report():
             print(f"Successfully sent report to chat {cid}")
         except Exception as e:
             print(f"Ошибка отправки в чат {cid}: {str(e)}")
-    
     print("Report generation and sending completed")
 
-# Настраиваем планировщик для отправки отчета каждый день в 18:30
 sched = None
+
 def init_scheduler():
     global sched
     if sched is None:
         sched = BackgroundScheduler(timezone="Europe/Samara")
         sched.add_job(send_report, 'cron', hour=18, minute=30)
         sched.start()
-
-# Инициализируем планировщик при запуске
-init_scheduler()
 
 @app.route('/')
 def index():
@@ -219,4 +214,7 @@ def trigger_report():
         return jsonify({"status": "error", "message": f"Ошибка при отправке отчета: {str(e)}"}), 500
 
 if __name__ == '__main__':
+    # Инициализируем планировщик только в основном процессе Flask (избегая двойного запуска при debug)
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        init_scheduler()
     app.run(host='0.0.0.0', port=8000)
