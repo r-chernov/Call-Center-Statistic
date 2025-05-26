@@ -171,7 +171,7 @@ def init_scheduler():
     global sched
     if sched is None:
         sched = BackgroundScheduler(timezone="Europe/Samara")
-        sched.add_job(send_report, 'cron', hour=18, minute=30)
+        sched.add_job(lambda: requests.get('http://82.97.249.124/send_report'), 'cron', hour=18, minute=30)
         sched.start()
 
 @app.route('/')
