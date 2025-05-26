@@ -110,11 +110,13 @@ def fetch_current_status():
     return {oid: STATUS_MAP.get(st, st) for oid,st in status.items()}
 
 
-def fetch_new_numbers_total():
+def fetch_new_numbers_total_by_active():
     params = [
         ("statuses[]", "1"),
         ("campaign_ids[]", "67"),
-        ("campaign_ids[]", "70"),
+        ("campaign_ids[]", "71"),
+        ("campaign_ids[]", "44"),
+        ("campaign_ids[]", "39"),
         ("page", 1),
         ("limit", 1),
     ]
@@ -122,7 +124,6 @@ def fetch_new_numbers_total():
     r.raise_for_status()
     data = r.json()
     return data.get("totalCount", len(data.get("items", [])))
-
 
 def send_report():
     print(f"Starting report generation at {datetime.now(pytz.timezone('Europe/Samara'))}")
@@ -186,7 +187,7 @@ def stats():
     cs20    = fetch_counts(CS20)
     cs22    = fetch_counts(CS22)
     allc    = fetch_all_counts()
-    new_tot = fetch_new_numbers_total()
+    new_tot = fetch_new_numbers_total_by_active()
     calls   = fetch_all_calls_details()
     sums, cnts = defaultdict(int), defaultdict(int)
     for c in calls:
