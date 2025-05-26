@@ -152,7 +152,7 @@ def send_report():
             f"Диалогов:        {total.get(oid,0)}\n"
             f"Согласие:        {cs8.get(oid,0)}\n"
             f"Перевод:         {cs20.get(oid,0)}\n"
-            f"Статус 22:       {cs22.get(oid,0)}\n"
+            f"Агент. Согласие:       {cs22.get(oid,0)}\n"
             f"Средн. время:    {avg.get(oid,0)}"
         )
     text = "\n\n".join(lines)
