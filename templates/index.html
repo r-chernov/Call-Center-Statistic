@@ -69,6 +69,10 @@
     <!-- Сюда будет вставлено: "Новых номеров – X" -->
   </div>
 
+  <div class="summary" id="new-numbers-noactive">
+    <!-- Сюда будет вставлено: "Новых номеров неактивных проектов – X" -->
+  </div>
+
   <table>
     <thead>
       <tr>
@@ -98,6 +102,8 @@
       // выводим общее число новых номеров
       document.getElementById('new-numbers').textContent =
         `Новых номеров – ${data.new}`;
+      document.getElementById('new-numbers-noactive').textContent =
+        `Новых номеров неактивных проектов – ${data.new_noactive}`;
 
       Object.entries(data.operators).forEach(([id,name]) => {
         const all   = data.all[id]   || 0;
