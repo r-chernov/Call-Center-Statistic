@@ -78,6 +78,7 @@
         <th>Диалогов</th>
         <th>Перевод</th>
         <th>Согласие</th>
+        <th>Статус 22</th>
         <th>Среднее, сек</th>
       </tr>
     </thead>
@@ -104,8 +105,9 @@
         const total = data.total[id] || 0;
         const cs20  = data.cs20[id]  || 0;
         const cs8   = data.cs8[id]   || 0;
+        const cs22  = data.cs22[id]  || 0;
         const avg   = data.avg[id]   || 0;
-        if (all===0 && total===0 && cs20===0 && cs8===0 && avg===0) return;
+        if (all===0 && total===0 && cs20===0 && cs8===0 && cs22===0 && avg===0) return;
 
         const st = data.status[id] || '-';
 
@@ -117,6 +119,7 @@
             <td>${total}</td>
             <td>${cs20}</td>
             <td>${cs8}</td>
+            <td>${cs22}</td>
             <td>${avg}</td>
           </tr>
         `);
