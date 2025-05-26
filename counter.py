@@ -49,6 +49,7 @@ ALL_CALLS_PARAMS = [("page",1), ("limit",10000)]
 STAT_FULL = ["8","9","10","11","13","14","15","16","20","21","22","23","24","25"]
 CS8        = ["8"]
 CS20       = ["20"]
+CS22       = ["22"]
 
 # для тестирования локально:
 TEST_DATE = os.getenv("TEST_DATE")  # e.g. "14-05-2025"
@@ -128,6 +129,7 @@ def send_report():
     total = fetch_counts(STAT_FULL)
     cs8   = fetch_counts(CS8)
     cs20  = fetch_counts(CS20)
+    cs22  = fetch_counts(CS22)
     allc  = fetch_all_counts()
     calls = fetch_all_calls_details()
 
@@ -150,6 +152,7 @@ def send_report():
             f"Диалогов:        {total.get(oid,0)}\n"
             f"Согласие:        {cs8.get(oid,0)}\n"
             f"Перевод:         {cs20.get(oid,0)}\n"
+            f"Статус 22:       {cs22.get(oid,0)}\n"
             f"Средн. время:    {avg.get(oid,0)}"
         )
     text = "\n\n".join(lines)
@@ -181,6 +184,7 @@ def stats():
     total   = fetch_counts(STAT_FULL)
     cs8     = fetch_counts(CS8)
     cs20    = fetch_counts(CS20)
+    cs22    = fetch_counts(CS22)
     allc    = fetch_all_counts()
     new_tot = fetch_new_numbers_total()
     calls   = fetch_all_calls_details()
@@ -201,6 +205,7 @@ def stats():
         "total":     total,
         "cs8":       cs8,
         "cs20":      cs20,
+        "cs22":      cs22,
         "avg":       avg,
         "new":       new_tot
     })
