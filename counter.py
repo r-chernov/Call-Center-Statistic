@@ -234,7 +234,8 @@ def stats():
         "cs20":      cs20,
         "cs22":      cs22,
         "avg":       avg,
-        "new":       new_tot
+        "new":       new_tot,
+        "new_noactive": new_noactive_tot
     })
 
 @app.route('/send_report')
