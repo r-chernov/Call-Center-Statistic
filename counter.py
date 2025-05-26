@@ -7,6 +7,8 @@ from telegram import Bot
 from apscheduler.schedulers.background import BackgroundScheduler
 import asyncio
 import os
+import inspect
+import re
 
 app = Flask(__name__)
 
@@ -125,6 +127,29 @@ def fetch_new_numbers_total_by_active():
     data = r.json()
     return data.get("totalCount", len(data.get("items", [])))
 
+def fetch_new_numbers_total_by_noactive():
+    # Получаем исходный код функции fetch_new_numbers_total_by_active
+    source = inspect.getsource(fetch_new_numbers_total_by_active)
+    
+    # Ищем все campaign_ids[] в формате ("campaign_ids[]", "<число>")
+    active_ids = set(map(int, re.findall(r'\("campaign_ids\[\]",\s*"(\d+)"\)', source)))
+
+    # Генерируем ID от 0 до 100, кроме найденных
+    all_ids = set(range(0, 101))
+    noactive_ids = sorted(all_ids - active_ids)
+
+    # Собираем параметры запроса
+    params = [("statuses[]", "1")]
+    for campaign_id in noactive_ids:
+        params.append(("campaign_ids[]", str(campaign_id)))
+    params.append(("page", 1))
+    params.append(("limit", 1))
+
+    r = requests.get(CONTACT_LIST_URL, params=params, headers=HEADERS)
+    r.raise_for_status()
+    data = r.json()
+    return data.get("totalCount", len(data.get("items", [])))
+
 def send_report():
     print(f"Starting report generation at {datetime.now(pytz.timezone('Europe/Samara'))}")
     total = fetch_counts(STAT_FULL)
@@ -188,6 +213,7 @@ def stats():
     cs22    = fetch_counts(CS22)
     allc    = fetch_all_counts()
     new_tot = fetch_new_numbers_total_by_active()
+    new_noactive_tot = fetch_new_numbers_total_by_noactive()
     calls   = fetch_all_calls_details()
     sums, cnts = defaultdict(int), defaultdict(int)
     for c in calls:
