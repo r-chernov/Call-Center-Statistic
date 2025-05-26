@@ -73,7 +73,6 @@
     <thead>
       <tr>
         <th>Оператор</th>
-        <th>Статус</th>
         <th>Всего звонков</th>
         <th>Диалогов</th>
         <th>Перевод</th>
@@ -109,12 +108,9 @@
         const avg   = data.avg[id]   || 0;
         if (all===0 && total===0 && cs20===0 && cs8===0 && cs22===0 && avg===0) return;
 
-        const st = data.status[id] || '-';
-
         tbody.insertAdjacentHTML('beforeend', `
           <tr>
             <td>${name}</td>
-            <td>${st}</td>
             <td>${all}</td>
             <td>${total}</td>
             <td>${cs20}</td>
