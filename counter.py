@@ -76,7 +76,7 @@ def fetch_counts(status_list):
     params = build_base_params() + ALL_CALLS_PARAMS
     for s in status_list:
         params.append(("client_statuses[]", s))
-    r = requests.get(CALL_LIST_URL, params=params, headers=HEADERS)
+    r = requests.get(CALL_LIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     cnt = Counter()
     for it in r.json().get("items", []):
@@ -92,15 +92,15 @@ def fetch_all_counts():
 
 def fetch_all_calls_details():
     params = build_base_params() + ALL_CALLS_PARAMS
-    r = requests.get(CALL_LIST_URL, params=params, headers=HEADERS)
+    r = requests.get(CALL_LIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json().get("items", [])
 
 
 def fetch_current_status():
     params = build_base_params() + [("page",1),("limit",1000)]
-    r1 = requests.get(HIST_URL, params=params, headers=HEADERS); r1.raise_for_status()
-    r2 = requests.get(LIST_URL, params=params, headers=HEADERS); r2.raise_for_status()
+    r1 = requests.get(HIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT); r1.raise_for_status()
+    r2 = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT); r2.raise_for_status()
     status = {}
     for ev in r1.json().get("items", []):
         oid = str(ev.get("id") or "")
@@ -123,7 +123,7 @@ def fetch_new_numbers_total_by_active():
         ("page", 1),
         ("limit", 1),
     ]
-    r = requests.get(CONTACT_LIST_URL, params=params, headers=HEADERS)
+    r = requests.get(CONTACT_LIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     data = r.json()
     return data.get("totalCount", len(data.get("items", [])))
@@ -146,7 +146,7 @@ def fetch_new_numbers_total_by_noactive():
     params.append(("page", 1))
     params.append(("limit", 1))
 
-    r = requests.get(CONTACT_LIST_URL, params=params, headers=HEADERS)
+    r = requests.get(CONTACT_LIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     data = r.json()
     return data.get("totalCount", len(data.get("items", [])))
@@ -452,21 +452,41 @@ def trigger_report():
 @app.route('/send_monthly_report/<int:year>/<int:month>')
 def trigger_monthly_report(year, month):
     try:
+        print(f"Начало обработки запроса месячного отчета для {year}/{month}")
+        
         if not (1 <= month <= 12):
-            return jsonify({"status": "error", "message": "Месяц должен быть от 1 до 12"}), 400
+            error_msg = "Месяц должен быть от 1 до 12"
+            print(error_msg)
+            return jsonify({"status": "error", "message": error_msg}), 400
         
         current_year = datetime.now().year
         if not (2020 <= year <= current_year + 1):
-            return jsonify({"status": "error", "message": f"Год должен быть от 2020 до {current_year + 1}"}), 400
+            error_msg = f"Год должен быть от 2020 до {current_year + 1}"
+            print(error_msg)
+            return jsonify({"status": "error", "message": error_msg}), 400
             
+        print("Параметры валидны, начинаем формирование отчета")
         text = send_monthly_report_for_date(year, month)
+        
+        if text.startswith("Не удалось получить данные"):
+            return jsonify({"status": "error", "message": text}), 500
+            
+        print("Отчет успешно сформирован и отправлен")
         return jsonify({
             "status": "success", 
             "message": "Месячный отчет успешно отправлен",
             "report": text
         })
     except Exception as e:
-        return jsonify({"status": "error", "message": f"Ошибка при отправке месячного отчета: {str(e)}"}), 500
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Ошибка при отправке месячного отчета: {str(e)}")
+        print(f"Детали ошибки:\n{error_details}")
+        return jsonify({
+            "status": "error", 
+            "message": f"Ошибка при отправке месячного отчета: {str(e)}",
+            "details": error_details
+        }), 500
 
 if __name__ == '__main__':
     init_scheduler()
