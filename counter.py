@@ -20,7 +20,8 @@ LIST_URL         = f"{API_BASE}/user_report/list"
 CONTACT_LIST_URL = f"{API_BASE}/contact/list"      # для новых номеров
 API_TOKEN        = "sdsa1232313"
 HEADERS          = {"Authorization": API_TOKEN, "Accept": "application/json"}
-REQUEST_TIMEOUT  = 30  # таймаут в секундах
+REQUEST_TIMEOUT  = 60  # увеличиваем таймаут до 60 секунд
+PAGE_SIZE        = 500  # уменьшаем размер страницы
 
 # === Telegram Bot ===
 BOT_TOKEN = "7657704358:AAHby9X8__-T0Hbvao3H0HQi5OdncyGoAJQ"
@@ -305,33 +306,7 @@ def send_monthly_report_for_date(year, month):
     print(f"Starting monthly report generation for {month}/{year} at {datetime.now(pytz.timezone('Europe/Samara'))}")
     params = build_monthly_params_for_date(year, month)
     
-    # Получаем все звонки за месяц
-    all_calls = []
-    page = 1
-    while True:
-        try:
-            current_params = params + [("page", page), ("limit", 1000)]
-            r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-            r.raise_for_status()
-            items = r.json().get("items", [])
-            if not items:
-                break
-            all_calls.extend(items)
-            print(f"Получено {len(items)} звонков на странице {page}")
-            page += 1
-        except requests.exceptions.Timeout:
-            print(f"Таймаут при получении страницы {page}")
-            break
-        except Exception as e:
-            print(f"Ошибка при получении страницы {page}: {str(e)}")
-            break
-
-    if not all_calls:
-        error_msg = "Не удалось получить данные о звонках"
-        print(error_msg)
-        return error_msg
-
-    # Считаем статистику
+    # Инициализируем счетчики
     total = Counter()
     cs8 = Counter()
     cs20 = Counter()
@@ -339,25 +314,55 @@ def send_monthly_report_for_date(year, month):
     allc = Counter()
     sums = defaultdict(int)
     cnts = defaultdict(int)
-
-    print(f"Обработка {len(all_calls)} звонков...")
-    for call in all_calls:
-        oid = str(call.get("operator", {}).get("id") or "")
-        if oid in OPERATORS:
-            allc[oid] += 1
-            status = str(call.get("client_status", {}).get("id") or "")
-            if status in STAT_FULL:
-                total[oid] += 1
-            if status in CS8:
-                cs8[oid] += 1
-            if status in CS20:
-                cs20[oid] += 1
-            if status in CS22:
-                cs22[oid] += 1
+    
+    # Получаем данные постранично
+    page = 1
+    while True:
+        try:
+            print(f"Получение страницы {page}...")
+            current_params = params + [("page", page), ("limit", PAGE_SIZE)]
+            r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            items = r.json().get("items", [])
             
-            td = call.get("talk_duration") or 0
-            sums[oid] += td
-            cnts[oid] += 1
+            if not items:
+                print(f"Страница {page} пуста, завершаем получение данных")
+                break
+                
+            print(f"Обработка {len(items)} звонков на странице {page}")
+            
+            # Обрабатываем звонки на текущей странице
+            for call in items:
+                oid = str(call.get("operator", {}).get("id") or "")
+                if oid in OPERATORS:
+                    allc[oid] += 1
+                    status = str(call.get("client_status", {}).get("id") or "")
+                    if status in STAT_FULL:
+                        total[oid] += 1
+                    if status in CS8:
+                        cs8[oid] += 1
+                    if status in CS20:
+                        cs20[oid] += 1
+                    if status in CS22:
+                        cs22[oid] += 1
+                    
+                    td = call.get("talk_duration") or 0
+                    sums[oid] += td
+                    cnts[oid] += 1
+            
+            page += 1
+            
+        except requests.exceptions.Timeout:
+            print(f"Таймаут при получении страницы {page}")
+            break
+        except Exception as e:
+            print(f"Ошибка при получении страницы {page}: {str(e)}")
+            break
+
+    if not any(allc.values()):
+        error_msg = "Не удалось получить данные о звонках"
+        print(error_msg)
+        return error_msg
 
     avg = {oid: (sums[oid] // cnts[oid] if cnts[oid] else 0) for oid in OPERATORS}
 
@@ -381,13 +386,23 @@ def send_monthly_report_for_date(year, month):
         )
     
     text = "\n\n".join(lines)
+    
+    # Отправляем отчет в Telegram
+    success = False
     for cid in CHAT_ID:
         try:
             print(f"Sending monthly report to chat {cid}")
             asyncio.run(bot.send_message(chat_id=cid, text=text, parse_mode="Markdown"))
             print(f"Successfully sent monthly report to chat {cid}")
+            success = True
         except Exception as e:
             print(f"Ошибка отправки месячного отчета в чат {cid}: {str(e)}")
+    
+    if not success:
+        error_msg = "Не удалось отправить отчет ни в один из чатов"
+        print(error_msg)
+        return error_msg
+        
     print("Monthly report generation and sending completed")
     return text
 
