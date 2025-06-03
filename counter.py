@@ -315,49 +315,47 @@ def send_monthly_report_for_date(year, month):
     sums = defaultdict(int)
     cnts = defaultdict(int)
     
-    # Получаем данные постранично
-    page = 1
-    while True:
-        try:
-            print(f"Получение страницы {page}...")
-            current_params = params + [("page", page), ("limit", PAGE_SIZE)]
-            r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-            r.raise_for_status()
-            items = r.json().get("items", [])
+    try:
+        print("Получение всех звонков за месяц...")
+        current_params = params + [("page", 1), ("limit", 200000)]
+        r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        items = r.json().get("items", [])
+        
+        if not items:
+            error_msg = "Не удалось получить данные о звонках"
+            print(error_msg)
+            return error_msg
             
-            if not items:
-                print(f"Страница {page} пуста, завершаем получение данных")
-                break
+        print(f"Обработка {len(items)} звонков")
+        
+        # Обрабатываем все звонки
+        for call in items:
+            oid = str(call.get("operator", {}).get("id") or "")
+            if oid in OPERATORS:
+                allc[oid] += 1
+                status = str(call.get("client_status", {}).get("id") or "")
+                if status in STAT_FULL:
+                    total[oid] += 1
+                if status in CS8:
+                    cs8[oid] += 1
+                if status in CS20:
+                    cs20[oid] += 1
+                if status in CS22:
+                    cs22[oid] += 1
                 
-            print(f"Обработка {len(items)} звонков на странице {page}")
-            
-            # Обрабатываем звонки на текущей странице
-            for call in items:
-                oid = str(call.get("operator", {}).get("id") or "")
-                if oid in OPERATORS:
-                    allc[oid] += 1
-                    status = str(call.get("client_status", {}).get("id") or "")
-                    if status in STAT_FULL:
-                        total[oid] += 1
-                    if status in CS8:
-                        cs8[oid] += 1
-                    if status in CS20:
-                        cs20[oid] += 1
-                    if status in CS22:
-                        cs22[oid] += 1
-                    
-                    td = call.get("talk_duration") or 0
-                    sums[oid] += td
-                    cnts[oid] += 1
-            
-            page += 1
-            
-        except requests.exceptions.Timeout:
-            print(f"Таймаут при получении страницы {page}")
-            break
-        except Exception as e:
-            print(f"Ошибка при получении страницы {page}: {str(e)}")
-            break
+                td = call.get("talk_duration") or 0
+                sums[oid] += td
+                cnts[oid] += 1
+        
+    except requests.exceptions.Timeout:
+        error_msg = "Таймаут при получении данных"
+        print(error_msg)
+        return error_msg
+    except Exception as e:
+        error_msg = f"Ошибка при получении данных: {str(e)}"
+        print(error_msg)
+        return error_msg
 
     if not any(allc.values()):
         error_msg = "Не удалось получить данные о звонках"
@@ -373,6 +371,7 @@ def send_monthly_report_for_date(year, month):
     }
     
     lines = [f"*Месячный отчёт КЦ за {month_names[month]} {year}*"]
+    lines.append(f"Всего обработано звонков: {len(items)}")
     
     for oid, name in OPERATORS.items():
         lines.append(
