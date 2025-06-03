@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, render_template
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from collections import Counter, defaultdict
 from telegram import Bot
@@ -191,13 +191,201 @@ def send_report():
             print(f"Ошибка отправки в чат {cid}: {str(e)}")
     print("Report generation and sending completed")
 
+def build_monthly_params():
+    tz = pytz.timezone("Europe/Samara")
+    now = datetime.now(tz)
+    # Получаем первый день текущего месяца
+    first_day = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    # Получаем последний день текущего месяца
+    if now.month == 12:
+        last_day = now.replace(year=now.year + 1, month=1, day=1) - timedelta(days=1)
+    else:
+        last_day = now.replace(month=now.month + 1, day=1) - timedelta(days=1)
+    
+    params = [
+        ("start_at", first_day.strftime("%d-%m-%Y 00:00")),
+        ("end_at", last_day.strftime("%d-%m-%Y 23:59"))
+    ]
+    for op in OPERATORS:
+        params.append(("operators[]", op))
+    return params
+
+def send_monthly_report():
+    print(f"Starting monthly report generation at {datetime.now(pytz.timezone('Europe/Samara'))}")
+    params = build_monthly_params()
+    
+    # Получаем все звонки за месяц
+    all_calls = []
+    page = 1
+    while True:
+        current_params = params + [("page", page), ("limit", 1000)]
+        r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS)
+        r.raise_for_status()
+        items = r.json().get("items", [])
+        if not items:
+            break
+        all_calls.extend(items)
+        page += 1
+
+    # Считаем статистику
+    total = Counter()
+    cs8 = Counter()
+    cs20 = Counter()
+    cs22 = Counter()
+    allc = Counter()
+    sums = defaultdict(int)
+    cnts = defaultdict(int)
+
+    for call in all_calls:
+        oid = str(call.get("operator", {}).get("id") or "")
+        if oid in OPERATORS:
+            allc[oid] += 1
+            status = str(call.get("client_status", {}).get("id") or "")
+            if status in STAT_FULL:
+                total[oid] += 1
+            if status in CS8:
+                cs8[oid] += 1
+            if status in CS20:
+                cs20[oid] += 1
+            if status in CS22:
+                cs22[oid] += 1
+            
+            td = call.get("talk_duration") or 0
+            sums[oid] += td
+            cnts[oid] += 1
+
+    avg = {oid: (sums[oid] // cnts[oid] if cnts[oid] else 0) for oid in OPERATORS}
+
+    tz = pytz.timezone("Europe/Samara")
+    now = datetime.now(tz)
+    month_name = now.strftime("%B").lower()
+    lines = [f"*Месячный отчёт КЦ за {month_name} {now.year}*"]
+    
+    for oid, name in OPERATORS.items():
+        lines.append(
+            f"{name}\n"
+            f"Всего звонков: {allc.get(oid,0)}\n"
+            f"Диалогов:        {total.get(oid,0)}\n"
+            f"Согласие:        {cs8.get(oid,0)}\n"
+            f"Перевод:         {cs20.get(oid,0)}\n"
+            f"Агент. Согласие:       {cs22.get(oid,0)}\n"
+            f"Средн. время:    {avg.get(oid,0)}"
+        )
+    
+    text = "\n\n".join(lines)
+    for cid in CHAT_ID:
+        try:
+            print(f"Sending monthly report to chat {cid}")
+            asyncio.run(bot.send_message(chat_id=cid, text=text, parse_mode="Markdown"))
+            print(f"Successfully sent monthly report to chat {cid}")
+        except Exception as e:
+            print(f"Ошибка отправки месячного отчета в чат {cid}: {str(e)}")
+    print("Monthly report generation and sending completed")
+
+def build_monthly_params_for_date(year, month):
+    tz = pytz.timezone("Europe/Samara")
+    # Получаем первый день указанного месяца
+    first_day = datetime(year, month, 1, tzinfo=tz)
+    # Получаем последний день указанного месяца
+    if month == 12:
+        last_day = datetime(year + 1, 1, 1, tzinfo=tz) - timedelta(days=1)
+    else:
+        last_day = datetime(year, month + 1, 1, tzinfo=tz) - timedelta(days=1)
+    
+    params = [
+        ("start_at", first_day.strftime("%d-%m-%Y 00:00")),
+        ("end_at", last_day.strftime("%d-%m-%Y 23:59"))
+    ]
+    for op in OPERATORS:
+        params.append(("operators[]", op))
+    return params
+
+def send_monthly_report_for_date(year, month):
+    print(f"Starting monthly report generation for {month}/{year} at {datetime.now(pytz.timezone('Europe/Samara'))}")
+    params = build_monthly_params_for_date(year, month)
+    
+    # Получаем все звонки за месяц
+    all_calls = []
+    page = 1
+    while True:
+        current_params = params + [("page", page), ("limit", 1000)]
+        r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS)
+        r.raise_for_status()
+        items = r.json().get("items", [])
+        if not items:
+            break
+        all_calls.extend(items)
+        page += 1
+
+    # Считаем статистику
+    total = Counter()
+    cs8 = Counter()
+    cs20 = Counter()
+    cs22 = Counter()
+    allc = Counter()
+    sums = defaultdict(int)
+    cnts = defaultdict(int)
+
+    for call in all_calls:
+        oid = str(call.get("operator", {}).get("id") or "")
+        if oid in OPERATORS:
+            allc[oid] += 1
+            status = str(call.get("client_status", {}).get("id") or "")
+            if status in STAT_FULL:
+                total[oid] += 1
+            if status in CS8:
+                cs8[oid] += 1
+            if status in CS20:
+                cs20[oid] += 1
+            if status in CS22:
+                cs22[oid] += 1
+            
+            td = call.get("talk_duration") or 0
+            sums[oid] += td
+            cnts[oid] += 1
+
+    avg = {oid: (sums[oid] // cnts[oid] if cnts[oid] else 0) for oid in OPERATORS}
+
+    month_names = {
+        1: "январь", 2: "февраль", 3: "март", 4: "апрель",
+        5: "май", 6: "июнь", 7: "июль", 8: "август",
+        9: "сентябрь", 10: "октябрь", 11: "ноябрь", 12: "декабрь"
+    }
+    
+    lines = [f"*Месячный отчёт КЦ за {month_names[month]} {year}*"]
+    
+    for oid, name in OPERATORS.items():
+        lines.append(
+            f"{name}\n"
+            f"Всего звонков: {allc.get(oid,0)}\n"
+            f"Диалогов:        {total.get(oid,0)}\n"
+            f"Согласие:        {cs8.get(oid,0)}\n"
+            f"Перевод:         {cs20.get(oid,0)}\n"
+            f"Агент. Согласие:       {cs22.get(oid,0)}\n"
+            f"Средн. время:    {avg.get(oid,0)}"
+        )
+    
+    text = "\n\n".join(lines)
+    for cid in CHAT_ID:
+        try:
+            print(f"Sending monthly report to chat {cid}")
+            asyncio.run(bot.send_message(chat_id=cid, text=text, parse_mode="Markdown"))
+            print(f"Successfully sent monthly report to chat {cid}")
+        except Exception as e:
+            print(f"Ошибка отправки месячного отчета в чат {cid}: {str(e)}")
+    print("Monthly report generation and sending completed")
+    return text
+
 sched = None
 
 def init_scheduler():
     global sched
     if sched is None:
         sched = BackgroundScheduler(timezone="Europe/Samara")
+        # Ежедневный отчет в 18:30
         sched.add_job(send_report, 'cron', hour=18, minute=30)
+        # Месячный отчет в последний день месяца в 19:00
+        sched.add_job(send_monthly_report, 'cron', day='last', hour=19, minute=0)
         sched.start()
 
 @app.route('/')
@@ -245,6 +433,25 @@ def trigger_report():
         return jsonify({"status": "success", "message": "Отчет успешно отправлен"})
     except Exception as e:
         return jsonify({"status": "error", "message": f"Ошибка при отправке отчета: {str(e)}"}), 500
+
+@app.route('/send_monthly_report/<int:year>/<int:month>')
+def trigger_monthly_report(year, month):
+    try:
+        if not (1 <= month <= 12):
+            return jsonify({"status": "error", "message": "Месяц должен быть от 1 до 12"}), 400
+        
+        current_year = datetime.now().year
+        if not (2020 <= year <= current_year + 1):
+            return jsonify({"status": "error", "message": f"Год должен быть от 2020 до {current_year + 1}"}), 400
+            
+        text = send_monthly_report_for_date(year, month)
+        return jsonify({
+            "status": "success", 
+            "message": "Месячный отчет успешно отправлен",
+            "report": text
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Ошибка при отправке месячного отчета: {str(e)}"}), 500
 
 if __name__ == '__main__':
     init_scheduler()
