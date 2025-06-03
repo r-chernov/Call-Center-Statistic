@@ -20,6 +20,7 @@ LIST_URL         = f"{API_BASE}/user_report/list"
 CONTACT_LIST_URL = f"{API_BASE}/contact/list"      # для новых номеров
 API_TOKEN        = "sdsa1232313"
 HEADERS          = {"Authorization": API_TOKEN, "Accept": "application/json"}
+REQUEST_TIMEOUT  = 30  # таймаут в секундах
 
 # === Telegram Bot ===
 BOT_TOKEN = "7657704358:AAHby9X8__-T0Hbvao3H0HQi5OdncyGoAJQ"
@@ -308,14 +309,27 @@ def send_monthly_report_for_date(year, month):
     all_calls = []
     page = 1
     while True:
-        current_params = params + [("page", page), ("limit", 1000)]
-        r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS)
-        r.raise_for_status()
-        items = r.json().get("items", [])
-        if not items:
+        try:
+            current_params = params + [("page", page), ("limit", 1000)]
+            r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            items = r.json().get("items", [])
+            if not items:
+                break
+            all_calls.extend(items)
+            print(f"Получено {len(items)} звонков на странице {page}")
+            page += 1
+        except requests.exceptions.Timeout:
+            print(f"Таймаут при получении страницы {page}")
             break
-        all_calls.extend(items)
-        page += 1
+        except Exception as e:
+            print(f"Ошибка при получении страницы {page}: {str(e)}")
+            break
+
+    if not all_calls:
+        error_msg = "Не удалось получить данные о звонках"
+        print(error_msg)
+        return error_msg
 
     # Считаем статистику
     total = Counter()
@@ -326,6 +340,7 @@ def send_monthly_report_for_date(year, month):
     sums = defaultdict(int)
     cnts = defaultdict(int)
 
+    print(f"Обработка {len(all_calls)} звонков...")
     for call in all_calls:
         oid = str(call.get("operator", {}).get("id") or "")
         if oid in OPERATORS:
