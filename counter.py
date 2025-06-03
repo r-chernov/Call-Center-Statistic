@@ -197,7 +197,7 @@ def init_scheduler():
     global sched
     if sched is None:
         sched = BackgroundScheduler(timezone="Europe/Samara")
-        sched.add_job(lambda: requests.get('http://82.97.249.124/send_report'), 'cron', hour=18, minute=30)
+        sched.add_job(send_report, 'cron', hour=18, minute=30)
         sched.start()
 
 @app.route('/')
@@ -247,7 +247,5 @@ def trigger_report():
         return jsonify({"status": "error", "message": f"Ошибка при отправке отчета: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    # Инициализируем планировщик только в основном процессе Flask (избегая двойного запуска при debug)
-    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-        init_scheduler()
+    init_scheduler()
     app.run(host='0.0.0.0', port=8000)
