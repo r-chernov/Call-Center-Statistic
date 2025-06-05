@@ -117,10 +117,10 @@ def fetch_current_status():
 def fetch_new_numbers_total_by_active():
     params = [
         ("statuses[]", "1"),
-        ("campaign_ids[]", "67"),
-        ("campaign_ids[]", "71"),
         ("campaign_ids[]", "44"),
-        ("campaign_ids[]", "39"),
+        ("campaign_ids[]", "71"),
+        ("campaign_ids[]", "72"),
+        ("campaign_ids[]", "73"),
         ("page", 1),
         ("limit", 1),
     ]
