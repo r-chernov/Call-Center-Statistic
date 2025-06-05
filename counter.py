@@ -18,10 +18,11 @@ CALL_LIST_URL    = f"{API_BASE}/call/list"
 HIST_URL         = f"{API_BASE}/user_report/list/history"
 LIST_URL         = f"{API_BASE}/user_report/list"
 CONTACT_LIST_URL = f"{API_BASE}/contact/list"      # для новых номеров
+CAMPAIGN_LIST_URL = f"{API_BASE}/campaign/list"    # для получения активных проектов
 API_TOKEN        = "sdsa1232313"
 HEADERS          = {"Authorization": API_TOKEN, "Accept": "application/json"}
-REQUEST_TIMEOUT  = 60  # увеличиваем таймаут до 60 секунд
-PAGE_SIZE        = 500  # уменьшаем размер страницы
+REQUEST_TIMEOUT  = 60  # таймаут в секундах
+PAGE_SIZE        = 500  # размер страницы
 
 # === Telegram Bot ===
 BOT_TOKEN = "7657704358:AAHby9X8__-T0Hbvao3H0HQi5OdncyGoAJQ"
@@ -57,6 +58,45 @@ CS22       = ["22"]
 
 # для тестирования локально:
 TEST_DATE = os.getenv("TEST_DATE")  # e.g. "14-05-2025"
+
+# Глобальная переменная для хранения активных проектов
+active_campaigns = []
+
+def fetch_active_campaigns():
+    """Получает список активных проектов"""
+    global active_campaigns
+    try:
+        print("Получение списка активных проектов...")
+        params = [("active", "true")]
+        r = requests.get(CAMPAIGN_LIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        campaigns = r.json().get("items", [])
+        active_campaigns = [str(camp.get("id")) for camp in campaigns if camp.get("id")]
+        print(f"Получено {len(active_campaigns)} активных проектов: {active_campaigns}")
+        return active_campaigns
+    except Exception as e:
+        print(f"Ошибка при получении активных проектов: {str(e)}")
+        return []
+
+def fetch_new_numbers_total_by_active():
+    """Получает количество новых номеров для активных проектов"""
+    if not active_campaigns:
+        fetch_active_campaigns()
+    
+    params = [("statuses[]", "1")]
+    for campaign_id in active_campaigns:
+        params.append(("campaign_ids[]", campaign_id))
+    params.append(("page", 1))
+    params.append(("limit", 1))
+
+    try:
+        r = requests.get(CONTACT_LIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("totalCount", len(data.get("items", [])))
+    except Exception as e:
+        print(f"Ошибка при получении количества новых номеров: {str(e)}")
+        return 0
 
 def build_base_params():
     if TEST_DATE:
@@ -113,21 +153,6 @@ def fetch_current_status():
             status[oid] = ev["event"]
     return {oid: STATUS_MAP.get(st, st) for oid,st in status.items()}
 
-
-def fetch_new_numbers_total_by_active():
-    params = [
-        ("statuses[]", "1"),
-        ("campaign_ids[]", "44"),
-        ("campaign_ids[]", "71"),
-        ("campaign_ids[]", "72"),
-        ("campaign_ids[]", "73"),
-        ("page", 1),
-        ("limit", 1),
-    ]
-    r = requests.get(CONTACT_LIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-    r.raise_for_status()
-    data = r.json()
-    return data.get("totalCount", len(data.get("items", [])))
 
 def fetch_new_numbers_total_by_noactive():
     # Получаем исходный код функции fetch_new_numbers_total_by_active
@@ -315,47 +340,49 @@ def send_monthly_report_for_date(year, month):
     sums = defaultdict(int)
     cnts = defaultdict(int)
     
-    try:
-        print("Получение всех звонков за месяц...")
-        current_params = params + [("page", 1), ("limit", 200000)]
-        r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        items = r.json().get("items", [])
-        
-        if not items:
-            error_msg = "Не удалось получить данные о звонках"
-            print(error_msg)
-            return error_msg
+    # Получаем данные постранично
+    page = 1
+    while True:
+        try:
+            print(f"Получение страницы {page}...")
+            current_params = params + [("page", page), ("limit", PAGE_SIZE)]
+            r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            items = r.json().get("items", [])
             
-        print(f"Обработка {len(items)} звонков")
-        
-        # Обрабатываем все звонки
-        for call in items:
-            oid = str(call.get("operator", {}).get("id") or "")
-            if oid in OPERATORS:
-                allc[oid] += 1
-                status = str(call.get("client_status", {}).get("id") or "")
-                if status in STAT_FULL:
-                    total[oid] += 1
-                if status in CS8:
-                    cs8[oid] += 1
-                if status in CS20:
-                    cs20[oid] += 1
-                if status in CS22:
-                    cs22[oid] += 1
+            if not items:
+                print(f"Страница {page} пуста, завершаем получение данных")
+                break
                 
-                td = call.get("talk_duration") or 0
-                sums[oid] += td
-                cnts[oid] += 1
-        
-    except requests.exceptions.Timeout:
-        error_msg = "Таймаут при получении данных"
-        print(error_msg)
-        return error_msg
-    except Exception as e:
-        error_msg = f"Ошибка при получении данных: {str(e)}"
-        print(error_msg)
-        return error_msg
+            print(f"Обработка {len(items)} звонков на странице {page}")
+            
+            # Обрабатываем звонки на текущей странице
+            for call in items:
+                oid = str(call.get("operator", {}).get("id") or "")
+                if oid in OPERATORS:
+                    allc[oid] += 1
+                    status = str(call.get("client_status", {}).get("id") or "")
+                    if status in STAT_FULL:
+                        total[oid] += 1
+                    if status in CS8:
+                        cs8[oid] += 1
+                    if status in CS20:
+                        cs20[oid] += 1
+                    if status in CS22:
+                        cs22[oid] += 1
+                    
+                    td = call.get("talk_duration") or 0
+                    sums[oid] += td
+                    cnts[oid] += 1
+            
+            page += 1
+            
+        except requests.exceptions.Timeout:
+            print(f"Таймаут при получении страницы {page}")
+            break
+        except Exception as e:
+            print(f"Ошибка при получении страницы {page}: {str(e)}")
+            break
 
     if not any(allc.values()):
         error_msg = "Не удалось получить данные о звонках"
@@ -371,7 +398,6 @@ def send_monthly_report_for_date(year, month):
     }
     
     lines = [f"*Месячный отчёт КЦ за {month_names[month]} {year}*"]
-    lines.append(f"Всего обработано звонков: {len(items)}")
     
     for oid, name in OPERATORS.items():
         lines.append(
@@ -415,6 +441,8 @@ def init_scheduler():
         sched.add_job(send_report, 'cron', hour=18, minute=30)
         # Месячный отчет в последний день месяца в 19:00
         sched.add_job(send_monthly_report, 'cron', day='last', hour=19, minute=0)
+        # Обновление списка активных проектов в 10:00
+        sched.add_job(fetch_active_campaigns, 'cron', hour=10, minute=0)
         sched.start()
 
 @app.route('/')
