@@ -72,16 +72,31 @@ STATUS_MAP = {
 }
 
 ALL_CALLS_PARAMS = [("page",1), ("limit",10000)]
-STAT_FULL = ["8","9","10","11","13","14","15","16","20","21","22","23","24","25"]
+STAT_FULL = ["8","9","10","11","13","14","15","16","20","21","22","23","24","25","30","34","35"]
 CS8        = ["8"]
 CS20       = ["20"]
 CS22       = ["22"]
+LEAD_AGENT = ["22","30"]
 
 # для тестирования локально:
 TEST_DATE = os.getenv("TEST_DATE")  # e.g. "14-05-2025"
 
 # Глобальная переменная для хранения активных проектов
 active_campaigns = []
+
+def short_name(name):
+    parts = [p for p in (name or "").split() if p]
+    return " ".join(parts[:2]) if parts else name
+
+def format_hms(seconds):
+    try:
+        total = int(seconds)
+    except (TypeError, ValueError):
+        total = 0
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -98,6 +113,9 @@ def init_db():
                 cs8_calls INTEGER NOT NULL,
                 cs20_calls INTEGER NOT NULL,
                 cs22_calls INTEGER NOT NULL,
+                lead_agent_calls INTEGER NOT NULL DEFAULT 0,
+                line_calls INTEGER NOT NULL DEFAULT 0,
+                ck_lead_calls INTEGER NOT NULL DEFAULT 0,
                 talk_sum INTEGER NOT NULL,
                 talk_count INTEGER NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -105,6 +123,13 @@ def init_db():
             )
             """
         )
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(daily_operator_stats)")]
+        if "lead_agent_calls" not in cols:
+            conn.execute("ALTER TABLE daily_operator_stats ADD COLUMN lead_agent_calls INTEGER NOT NULL DEFAULT 0")
+        if "line_calls" not in cols:
+            conn.execute("ALTER TABLE daily_operator_stats ADD COLUMN line_calls INTEGER NOT NULL DEFAULT 0")
+        if "ck_lead_calls" not in cols:
+            conn.execute("ALTER TABLE daily_operator_stats ADD COLUMN ck_lead_calls INTEGER NOT NULL DEFAULT 0")
         conn.commit()
     finally:
         conn.close()
@@ -180,6 +205,9 @@ def get_report_data(start_date=None, end_date=None):
                 SUM(cs8_calls) AS cs8_calls,
                 SUM(cs20_calls) AS cs20_calls,
                 SUM(cs22_calls) AS cs22_calls,
+                SUM(lead_agent_calls) AS lead_agent_calls,
+                SUM(line_calls) AS line_calls,
+                SUM(ck_lead_calls) AS ck_lead_calls,
                 SUM(talk_sum) AS talk_sum,
                 SUM(talk_count) AS talk_count
             FROM daily_operator_stats
@@ -199,6 +227,9 @@ def get_report_data(start_date=None, end_date=None):
         "cs8": 0,
         "cs20": 0,
         "cs22": 0,
+        "lead_agent": 0,
+        "line": 0,
+        "ck_lead": 0,
         "talk_sum": 0,
         "talk_count": 0
     }
@@ -214,6 +245,9 @@ def get_report_data(start_date=None, end_date=None):
             "cs8": row["cs8_calls"] or 0,
             "cs20": row["cs20_calls"] or 0,
             "cs22": row["cs22_calls"] or 0,
+            "lead_agent": row["lead_agent_calls"] or 0,
+            "line": row["line_calls"] or 0,
+            "ck_lead": row["ck_lead_calls"] or 0,
             "avg": avg
         })
         totals["all"] += row["all_calls"] or 0
@@ -221,6 +255,9 @@ def get_report_data(start_date=None, end_date=None):
         totals["cs8"] += row["cs8_calls"] or 0
         totals["cs20"] += row["cs20_calls"] or 0
         totals["cs22"] += row["cs22_calls"] or 0
+        totals["lead_agent"] += row["lead_agent_calls"] or 0
+        totals["line"] += row["line_calls"] or 0
+        totals["ck_lead"] += row["ck_lead_calls"] or 0
         totals["talk_sum"] += talk_sum
         totals["talk_count"] += talk_count
 
@@ -236,6 +273,9 @@ def get_report_data(start_date=None, end_date=None):
             "cs8": totals["cs8"],
             "cs20": totals["cs20"],
             "cs22": totals["cs22"],
+            "lead_agent": totals["lead_agent"],
+            "line": totals["line"],
+            "ck_lead": totals["ck_lead"],
             "avg": avg_total,
             "reach": reach
         }
@@ -265,6 +305,9 @@ def aggregate_calls(calls, operators_map=None):
         "cs8": 0,
         "cs20": 0,
         "cs22": 0,
+        "lead_agent": 0,
+        "line": 0,
+        "ck_lead": 0,
         "talk_sum": 0,
         "talk_count": 0,
         "name": ""
@@ -283,14 +326,16 @@ def aggregate_calls(calls, operators_map=None):
         stats[oid]["all"] += 1
         if status in STAT_FULL:
             stats[oid]["total"] += 1
+            stats[oid]["talk_sum"] += int(td)
+            stats[oid]["talk_count"] += 1
         if status in CS8:
             stats[oid]["cs8"] += 1
         if status in CS20:
             stats[oid]["cs20"] += 1
         if status in CS22:
             stats[oid]["cs22"] += 1
-        stats[oid]["talk_sum"] += int(td)
-        stats[oid]["talk_count"] += 1
+        if status in LEAD_AGENT:
+            stats[oid]["lead_agent"] += 1
         if name:
             stats[oid]["name"] = name
     return stats
@@ -304,8 +349,8 @@ def upsert_daily_stats(date_str, stats):
             conn.execute(
                 """
                 INSERT INTO daily_operator_stats
-                (date, operator_id, operator_name, all_calls, total_calls, cs8_calls, cs20_calls, cs22_calls, talk_sum, talk_count, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (date, operator_id, operator_name, all_calls, total_calls, cs8_calls, cs20_calls, cs22_calls, lead_agent_calls, line_calls, ck_lead_calls, talk_sum, talk_count, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(date, operator_id) DO UPDATE SET
                     operator_name=excluded.operator_name,
                     all_calls=excluded.all_calls,
@@ -313,11 +358,14 @@ def upsert_daily_stats(date_str, stats):
                     cs8_calls=excluded.cs8_calls,
                     cs20_calls=excluded.cs20_calls,
                     cs22_calls=excluded.cs22_calls,
+                    lead_agent_calls=excluded.lead_agent_calls,
+                    line_calls=excluded.line_calls,
+                    ck_lead_calls=excluded.ck_lead_calls,
                     talk_sum=excluded.talk_sum,
                     talk_count=excluded.talk_count,
                     updated_at=excluded.updated_at
                 """,
-                (date_str, oid, name, data["all"], data["total"], data["cs8"], data["cs20"], data["cs22"], data["talk_sum"], data["talk_count"], now)
+                (date_str, oid, name, data["all"], data["total"], data["cs8"], data["cs20"], data["cs22"], data["lead_agent"], data["line"], data["ck_lead"], data["talk_sum"], data["talk_count"], now)
             )
         conn.commit()
     finally:
@@ -328,7 +376,12 @@ def sync_day(date_str):
     calls = fetch_calls_for_date(date_str, operators_map=OPERATORS)
     operators_from_calls = extract_operators_from_calls(calls)
     operators_map = OPERATORS or operators_from_calls
+    line_seconds = fetch_line_seconds(date_str, operators_map=operators_map)
     stats = aggregate_calls(calls, operators_map=operators_map)
+    for oid, seconds in line_seconds.items():
+        stats[oid]["line"] = seconds
+        if not stats[oid].get("name"):
+            stats[oid]["name"] = operators_map.get(oid, "")
     upsert_daily_stats(date_str, stats)
     return {
         "date": date_str,
@@ -478,6 +531,36 @@ def fetch_current_status(requested_date=None, operators_map=None):
             status[oid] = ev["event"]
     return {oid: STATUS_MAP.get(st, st) for oid,st in status.items()}
 
+def fetch_line_times(requested_date=None, operators_map=None):
+    if operators_map is None:
+        operators_map = OPERATORS
+    params = build_base_params(requested_date=requested_date, operators_map=operators_map) + [("page",1),("limit",1000)]
+    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
+    out = {}
+    for item in r.json().get("items", []):
+        oid = str(item.get("id") or "")
+        if operators_map and oid not in operators_map:
+            continue
+        out[oid] = format_hms(item.get("line"))
+    return out
+
+def fetch_line_seconds(date_str, operators_map=None):
+    if operators_map is None:
+        operators_map = OPERATORS
+    params = build_base_params(requested_date=date_str, operators_map=operators_map) + [("page",1),("limit",1000)]
+    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
+    out = {}
+    for item in r.json().get("items", []):
+        oid = str(item.get("id") or "")
+        if operators_map and oid not in operators_map:
+            continue
+        try:
+            out[oid] = int(item.get("line") or 0)
+        except (TypeError, ValueError):
+            out[oid] = 0
+    return out
 
 def extract_operators_from_calls(calls):
     operators = {}
@@ -520,7 +603,7 @@ def send_report():
     total = fetch_counts(STAT_FULL)
     cs8   = fetch_counts(CS8)
     cs20  = fetch_counts(CS20)
-    cs22  = fetch_counts(CS22)
+    lead_agent = fetch_counts(LEAD_AGENT)
     allc  = fetch_all_counts()
     calls = fetch_all_calls_details()
 
@@ -528,9 +611,12 @@ def send_report():
     for c in calls:
         oid = str(c.get("operator",{}).get("id") or "")
         if oid in OPERATORS:
-            td = c.get("talk_duration") or 0
-            sums[oid] += td
-            cnts[oid] += 1
+            status_obj = c.get("client_status") or {}
+            status = str(status_obj.get("id") or "")
+            if status in STAT_FULL:
+                td = c.get("talk_duration") or 0
+                sums[oid] += td
+                cnts[oid] += 1
     avg = {oid:(sums[oid]//cnts[oid] if cnts[oid] else 0) for oid in OPERATORS}
 
     tz    = pytz.timezone("Europe/Samara")
@@ -543,7 +629,7 @@ def send_report():
             f"Диалогов:        {total.get(oid,0)}\n"
             f"Согласие:        {cs8.get(oid,0)}\n"
             f"Перевод:         {cs20.get(oid,0)}\n"
-            f"Агент. Согласие:       {cs22.get(oid,0)}\n"
+            f"Лид агент:       {lead_agent.get(oid,0)}\n"
             f"Средн. время:    {avg.get(oid,0)}"
         )
     text = "\n\n".join(lines)
@@ -599,6 +685,7 @@ def send_monthly_report():
     cs8 = Counter()
     cs20 = Counter()
     cs22 = Counter()
+    lead_agent = Counter()
     allc = Counter()
     sums = defaultdict(int)
     cnts = defaultdict(int)
@@ -607,19 +694,21 @@ def send_monthly_report():
         oid = str(call.get("operator", {}).get("id") or "")
         if oid in OPERATORS:
             allc[oid] += 1
-            status = str(call.get("client_status", {}).get("id") or "")
+            status_obj = call.get("client_status") or {}
+            status = str(status_obj.get("id") or "")
             if status in STAT_FULL:
                 total[oid] += 1
+                td = call.get("talk_duration") or 0
+                sums[oid] += td
+                cnts[oid] += 1
             if status in CS8:
                 cs8[oid] += 1
             if status in CS20:
                 cs20[oid] += 1
             if status in CS22:
                 cs22[oid] += 1
-            
-            td = call.get("talk_duration") or 0
-            sums[oid] += td
-            cnts[oid] += 1
+            if status in LEAD_AGENT:
+                lead_agent[oid] += 1
 
     avg = {oid: (sums[oid] // cnts[oid] if cnts[oid] else 0) for oid in OPERATORS}
 
@@ -635,7 +724,7 @@ def send_monthly_report():
             f"Диалогов:        {total.get(oid,0)}\n"
             f"Согласие:        {cs8.get(oid,0)}\n"
             f"Перевод:         {cs20.get(oid,0)}\n"
-            f"Агент. Согласие:       {cs22.get(oid,0)}\n"
+            f"Лид агент:       {lead_agent.get(oid,0)}\n"
             f"Средн. время:    {avg.get(oid,0)}"
         )
     
@@ -678,6 +767,7 @@ def send_monthly_report_for_date(year, month):
     cs8 = Counter()
     cs20 = Counter()
     cs22 = Counter()
+    lead_agent = Counter()
     allc = Counter()
     sums = defaultdict(int)
     cnts = defaultdict(int)
@@ -703,19 +793,21 @@ def send_monthly_report_for_date(year, month):
                 oid = str(call.get("operator", {}).get("id") or "")
                 if oid in OPERATORS:
                     allc[oid] += 1
-                    status = str(call.get("client_status", {}).get("id") or "")
+                    status_obj = call.get("client_status") or {}
+                    status = str(status_obj.get("id") or "")
                     if status in STAT_FULL:
                         total[oid] += 1
+                        td = call.get("talk_duration") or 0
+                        sums[oid] += td
+                        cnts[oid] += 1
                     if status in CS8:
                         cs8[oid] += 1
                     if status in CS20:
                         cs20[oid] += 1
                     if status in CS22:
                         cs22[oid] += 1
-                    
-                    td = call.get("talk_duration") or 0
-                    sums[oid] += td
-                    cnts[oid] += 1
+                    if status in LEAD_AGENT:
+                        lead_agent[oid] += 1
             
             page += 1
             
@@ -748,7 +840,7 @@ def send_monthly_report_for_date(year, month):
             f"Диалогов:        {total.get(oid,0)}\n"
             f"Согласие:        {cs8.get(oid,0)}\n"
             f"Перевод:         {cs20.get(oid,0)}\n"
-            f"Агент. Согласие:       {cs22.get(oid,0)}\n"
+            f"Лид агент:       {lead_agent.get(oid,0)}\n"
             f"Средн. время:    {avg.get(oid,0)}"
         )
     
@@ -831,15 +923,17 @@ def report_export():
     wb = Workbook()
     ws = wb.active
     ws.title = "Report"
-    ws.append(["Оператор", "Всего", "Диалогов", "Перевод", "Согласие", "Агент. согласие", "Среднее, сек"])
+    ws.append(["Оператор", "Всего", "В линии", "Диалогов", "Перевод", "Согласие", "Лид Агент", "ЦК Лид", "Среднее, сек"])
     for row in data["rows"]:
         ws.append([
             row["operator_name"],
             row["all"],
+            format_hms(row.get("line", 0)),
             row["total"],
             row["cs20"],
             row["cs8"],
-            row["cs22"],
+            row.get("lead_agent", 0),
+            row.get("ck_lead", 0),
             row["avg"]
         ])
     totals = data.get("totals") or {}
@@ -848,10 +942,12 @@ def report_export():
         ws.append([
             "ИТОГО",
             totals.get("all", 0),
+            format_hms(totals.get("line", 0)),
             totals.get("total", 0),
             totals.get("cs20", 0),
             totals.get("cs8", 0),
-            totals.get("cs22", 0),
+            totals.get("lead_agent", 0),
+            totals.get("ck_lead", 0),
             totals.get("avg", 0)
         ])
     period = data.get("range")
@@ -942,7 +1038,7 @@ def stats():
     total   = fetch_counts(STAT_FULL, requested_date=requested_date, operators_map=operators_map)
     cs8     = fetch_counts(CS8, requested_date=requested_date, operators_map=operators_map)
     cs20    = fetch_counts(CS20, requested_date=requested_date, operators_map=operators_map)
-    cs22    = fetch_counts(CS22, requested_date=requested_date, operators_map=operators_map)
+    lead_agent = fetch_counts(LEAD_AGENT, requested_date=requested_date, operators_map=operators_map)
     allc    = fetch_all_counts(requested_date=requested_date, operators_map=operators_map)
     new_tot = fetch_new_numbers_total_by_active()
     new_noactive_tot = fetch_new_numbers_total_by_noactive()
@@ -950,23 +1046,30 @@ def stats():
     for c in calls:
         oid = str(c.get("operator",{}).get("id") or "")
         if not operators_map or oid in operators_map:
-            td = c.get("talk_duration") or 0
-            sums[oid] += td
-            cnts[oid] += 1
+            status_obj = c.get("client_status") or {}
+            status = str(status_obj.get("id") or "")
+            if status in STAT_FULL:
+                td = c.get("talk_duration") or 0
+                sums[oid] += td
+                cnts[oid] += 1
     avg    = {oid:(sums[oid]//cnts[oid] if cnts[oid] else 0) for oid in operators_map}
     status = fetch_current_status(requested_date=requested_date, operators_map=operators_map)
+    line_times = fetch_line_times(requested_date=requested_date, operators_map=operators_map)
 
     active_operator_ids = {oid for oid, count in allc.items() if count > 0}
-    operators_filtered = {oid: name for oid, name in operators_map.items() if oid in active_operator_ids}
+    operators_filtered = {oid: short_name(name) for oid, name in operators_map.items() if oid in active_operator_ids}
 
+    empty_metric = {oid: 0 for oid in operators_filtered}
     return jsonify({
         "operators": operators_filtered,
         "status":    {oid: status.get(oid) for oid in operators_filtered},
         "all":       {oid: allc.get(oid, 0) for oid in operators_filtered},
+        "line":      {oid: line_times.get(oid, "00:00:00") for oid in operators_filtered},
         "total":     {oid: total.get(oid, 0) for oid in operators_filtered},
         "cs8":       {oid: cs8.get(oid, 0) for oid in operators_filtered},
         "cs20":      {oid: cs20.get(oid, 0) for oid in operators_filtered},
-        "cs22":      {oid: cs22.get(oid, 0) for oid in operators_filtered},
+        "lead_agent": {oid: lead_agent.get(oid, 0) for oid in operators_filtered},
+        "ck_lead":   empty_metric,
         "avg":       {oid: avg.get(oid, 0) for oid in operators_filtered},
         "new":       new_tot,
         "new_noactive": new_noactive_tot,

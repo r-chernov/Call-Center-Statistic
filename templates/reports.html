@@ -263,7 +263,7 @@
 
     /* Таблица */
     .tableWrap{
-      width: min(1020px, 96vw);
+      width: min(1280px, 96vw);
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: var(--radius);
@@ -486,16 +486,18 @@
           <tr>
             <th>Оператор</th>
             <th>Всего</th>
+            <th>В линии</th>
             <th>Диалогов</th>
             <th>Перевод</th>
             <th>Согласие</th>
-            <th>Агент. согласие</th>
+            <th>Лид Агент</th>
+            <th>ЦК Лид</th>
             <th>Среднее, сек</th>
           </tr>
         </thead>
         <tbody id="tbody">
           <tr>
-            <td class="muted" colspan="7">Нет данных</td>
+            <td class="muted" colspan="9">Нет данных</td>
           </tr>
         </tbody>
       </table>
@@ -538,17 +540,26 @@
     function renderTable(rows){
       const tbody = document.getElementById("tbody");
       if (!rows.length) {
-        tbody.innerHTML = '<tr><td class=\"muted\" colspan=\"7\">Нет данных</td></tr>';
+        tbody.innerHTML = '<tr><td class=\"muted\" colspan=\"9\">Нет данных</td></tr>';
         return;
       }
+      const formatHms = (value) => {
+        const total = Number(value || 0);
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+      };
       tbody.innerHTML = rows.map(r => `
         <tr>
           <td><strong>${r.operator_name}</strong></td>
           <td>${r.all}</td>
+          <td>${formatHms(r.line)}</td>
           <td>${r.total}</td>
           <td>${r.cs20}</td>
           <td>${r.cs8}</td>
-          <td>${r.cs22}</td>
+          <td>${r.lead_agent ?? 0}</td>
+          <td>${r.ck_lead ?? 0}</td>
           <td>${r.avg}</td>
         </tr>
       `).join("");

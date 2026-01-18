@@ -245,7 +245,7 @@
     }
 
     .tableWrap{
-      width: min(1020px, 96vw);
+      width: min(1280px, 96vw);
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: var(--radius);
@@ -398,10 +398,12 @@
           <tr>
             <th>Оператор</th>
             <th>Всего звонков</th>
+            <th>В линии</th>
             <th>Диалогов</th>
             <th>Перевод</th>
             <th>Согласие</th>
-            <th>Агент. Согласие</th>
+            <th>Лид Агент</th>
+            <th>ЦК Лид</th>
             <th>Среднее, сек</th>
           </tr>
         </thead>
@@ -466,21 +468,25 @@
 
       Object.entries(data.operators).forEach(([id, name]) => {
         const all = data.all[id] || 0;
+        const line = data.line[id] || 0;
         const total = data.total[id] || 0;
         const cs20 = data.cs20[id] || 0;
         const cs8 = data.cs8[id] || 0;
-        const cs22 = data.cs22[id] || 0;
+        const leadAgent = data.lead_agent[id] || 0;
+        const ckLead = data.ck_lead[id] || 0;
         const avg = data.avg[id] || 0;
-        if (all === 0 && total === 0 && cs20 === 0 && cs8 === 0 && cs22 === 0 && avg === 0) return;
+        if (all === 0 && line === 0 && total === 0 && cs20 === 0 && cs8 === 0 && leadAgent === 0 && ckLead === 0 && avg === 0) return;
 
         tbody.insertAdjacentHTML('beforeend', `
           <tr>
             <td>${name}</td>
             <td>${all}</td>
+            <td>${line}</td>
             <td>${total}</td>
             <td>${cs20}</td>
             <td>${cs8}</td>
-            <td>${cs22}</td>
+            <td>${leadAgent}</td>
+            <td>${ckLead}</td>
             <td>${avg}</td>
           </tr>
         `);
