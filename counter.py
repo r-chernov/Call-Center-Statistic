@@ -3,9 +3,7 @@ import requests
 from datetime import datetime, timedelta
 import pytz
 from collections import Counter, defaultdict
-from telegram import Bot
 from apscheduler.schedulers.background import BackgroundScheduler
-import asyncio
 import os
 import inspect
 import re
@@ -13,8 +11,10 @@ import time
 import sqlite3
 import io
 from openpyxl import Workbook
+from amo import amo_bp
 
 app = Flask(__name__)
+app.register_blueprint(amo_bp)
 
 def load_env():
     env_path = os.path.join(app.root_path, ".env")
@@ -50,10 +50,6 @@ PAGE_SIZE        = 500  # размер страницы
 DB_PATH = os.getenv("CALLCENTER_DB_PATH", os.path.join(app.root_path, "data", "callcenter.db"))
 ADMIN_TOKEN = os.getenv("CALLCENTER_ADMIN_TOKEN", "")
 
-# === Telegram Bot ===
-BOT_TOKEN = "7657704358:AAHby9X8__-T0Hbvao3H0HQi5OdncyGoAJQ"
-CHAT_ID   = [758234101, 453163837, 1906635370, 1930885085, 424502959]
-bot = Bot(token=BOT_TOKEN)
 
 # === Операторы и статус-маппинг ===
 OPERATORS = {}
@@ -77,6 +73,17 @@ CS8        = ["8"]
 CS20       = ["20"]
 CS22       = ["22"]
 LEAD_AGENT = ["22","30"]
+
+def get_talk_duration(call):
+    td = call.get("talk_duration") or 0
+    try:
+        return int(td)
+    except (TypeError, ValueError):
+        return 0
+
+def get_status_id(call):
+    status_obj = call.get("client_status") or {}
+    return str(status_obj.get("id") or "")
 
 # для тестирования локально:
 TEST_DATE = os.getenv("TEST_DATE")  # e.g. "14-05-2025"
@@ -320,13 +327,13 @@ def aggregate_calls(calls, operators_map=None):
         if operators_map and oid not in operators_map:
             continue
         name = op.get("full_name") or op.get("fullName") or operators_map.get(oid, "") if operators_map else ""
-        status_obj = call.get("client_status") or {}
-        status = str(status_obj.get("id") or "")
-        td = call.get("talk_duration") or 0
+        status = get_status_id(call)
+        td = get_talk_duration(call)
+        is_dialog = status in STAT_FULL and td > 20
         stats[oid]["all"] += 1
-        if status in STAT_FULL:
+        if is_dialog:
             stats[oid]["total"] += 1
-            stats[oid]["talk_sum"] += int(td)
+            stats[oid]["talk_sum"] += td
             stats[oid]["talk_count"] += 1
         if status in CS8:
             stats[oid]["cs8"] += 1
@@ -596,275 +603,6 @@ def fetch_new_numbers_total_by_noactive():
     data = r.json()
     return data.get("totalCount", len(data.get("items", [])))
 
-def send_report():
-    if not OPERATORS:
-        fetch_operators()
-    print(f"Starting report generation at {datetime.now(pytz.timezone('Europe/Samara'))}")
-    total = fetch_counts(STAT_FULL)
-    cs8   = fetch_counts(CS8)
-    cs20  = fetch_counts(CS20)
-    lead_agent = fetch_counts(LEAD_AGENT)
-    allc  = fetch_all_counts()
-    calls = fetch_all_calls_details()
-
-    sums, cnts = defaultdict(int), defaultdict(int)
-    for c in calls:
-        oid = str(c.get("operator",{}).get("id") or "")
-        if oid in OPERATORS:
-            status_obj = c.get("client_status") or {}
-            status = str(status_obj.get("id") or "")
-            if status in STAT_FULL:
-                td = c.get("talk_duration") or 0
-                sums[oid] += td
-                cnts[oid] += 1
-    avg = {oid:(sums[oid]//cnts[oid] if cnts[oid] else 0) for oid in OPERATORS}
-
-    tz    = pytz.timezone("Europe/Samara")
-    today = datetime.now(tz).strftime("%d.%m.%Y")
-    lines = [f"*Отчёт КЦ за {today}*"]
-    for oid,name in OPERATORS.items():
-        lines.append(
-            f"{name}\n"
-            f"Всего звонков: {allc.get(oid,0)}\n"
-            f"Диалогов:        {total.get(oid,0)}\n"
-            f"Согласие:        {cs8.get(oid,0)}\n"
-            f"Перевод:         {cs20.get(oid,0)}\n"
-            f"Лид агент:       {lead_agent.get(oid,0)}\n"
-            f"Средн. время:    {avg.get(oid,0)}"
-        )
-    text = "\n\n".join(lines)
-    for cid in CHAT_ID:
-        try:
-            print(f"Sending report to chat {cid}")
-            asyncio.run(bot.send_message(chat_id=cid, text=text, parse_mode="Markdown"))
-            print(f"Successfully sent report to chat {cid}")
-        except Exception as e:
-            print(f"Ошибка отправки в чат {cid}: {str(e)}")
-    print("Report generation and sending completed")
-
-def build_monthly_params():
-    tz = pytz.timezone("Europe/Samara")
-    now = datetime.now(tz)
-    # Получаем первый день текущего месяца
-    first_day = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    # Получаем последний день текущего месяца
-    if now.month == 12:
-        last_day = now.replace(year=now.year + 1, month=1, day=1) - timedelta(days=1)
-    else:
-        last_day = now.replace(month=now.month + 1, day=1) - timedelta(days=1)
-    
-    params = [
-        ("start_at", first_day.strftime("%d-%m-%Y 00:00")),
-        ("end_at", last_day.strftime("%d-%m-%Y 23:59"))
-    ]
-    for op in OPERATORS:
-        params.append(("operators[]", op))
-    return params
-
-def send_monthly_report():
-    if not OPERATORS:
-        fetch_operators()
-    print(f"Starting monthly report generation at {datetime.now(pytz.timezone('Europe/Samara'))}")
-    params = build_monthly_params()
-    
-    # Получаем все звонки за месяц
-    all_calls = []
-    page = 1
-    while True:
-        current_params = params + [("page", page), ("limit", 1000)]
-        r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS)
-        r.raise_for_status()
-        items = r.json().get("items", [])
-        if not items:
-            break
-        all_calls.extend(items)
-        page += 1
-
-    # Считаем статистику
-    total = Counter()
-    cs8 = Counter()
-    cs20 = Counter()
-    cs22 = Counter()
-    lead_agent = Counter()
-    allc = Counter()
-    sums = defaultdict(int)
-    cnts = defaultdict(int)
-
-    for call in all_calls:
-        oid = str(call.get("operator", {}).get("id") or "")
-        if oid in OPERATORS:
-            allc[oid] += 1
-            status_obj = call.get("client_status") or {}
-            status = str(status_obj.get("id") or "")
-            if status in STAT_FULL:
-                total[oid] += 1
-                td = call.get("talk_duration") or 0
-                sums[oid] += td
-                cnts[oid] += 1
-            if status in CS8:
-                cs8[oid] += 1
-            if status in CS20:
-                cs20[oid] += 1
-            if status in CS22:
-                cs22[oid] += 1
-            if status in LEAD_AGENT:
-                lead_agent[oid] += 1
-
-    avg = {oid: (sums[oid] // cnts[oid] if cnts[oid] else 0) for oid in OPERATORS}
-
-    tz = pytz.timezone("Europe/Samara")
-    now = datetime.now(tz)
-    month_name = now.strftime("%B").lower()
-    lines = [f"*Месячный отчёт КЦ за {month_name} {now.year}*"]
-    
-    for oid, name in OPERATORS.items():
-        lines.append(
-            f"{name}\n"
-            f"Всего звонков: {allc.get(oid,0)}\n"
-            f"Диалогов:        {total.get(oid,0)}\n"
-            f"Согласие:        {cs8.get(oid,0)}\n"
-            f"Перевод:         {cs20.get(oid,0)}\n"
-            f"Лид агент:       {lead_agent.get(oid,0)}\n"
-            f"Средн. время:    {avg.get(oid,0)}"
-        )
-    
-    text = "\n\n".join(lines)
-    for cid in CHAT_ID:
-        try:
-            print(f"Sending monthly report to chat {cid}")
-            asyncio.run(bot.send_message(chat_id=cid, text=text, parse_mode="Markdown"))
-            print(f"Successfully sent monthly report to chat {cid}")
-        except Exception as e:
-            print(f"Ошибка отправки месячного отчета в чат {cid}: {str(e)}")
-    print("Monthly report generation and sending completed")
-
-def build_monthly_params_for_date(year, month):
-    tz = pytz.timezone("Europe/Samara")
-    # Получаем первый день указанного месяца
-    first_day = datetime(year, month, 1, tzinfo=tz)
-    # Получаем последний день указанного месяца
-    if month == 12:
-        last_day = datetime(year + 1, 1, 1, tzinfo=tz) - timedelta(days=1)
-    else:
-        last_day = datetime(year, month + 1, 1, tzinfo=tz) - timedelta(days=1)
-    
-    params = [
-        ("start_at", first_day.strftime("%d-%m-%Y 00:00")),
-        ("end_at", last_day.strftime("%d-%m-%Y 23:59"))
-    ]
-    for op in OPERATORS:
-        params.append(("operators[]", op))
-    return params
-
-def send_monthly_report_for_date(year, month):
-    if not OPERATORS:
-        fetch_operators()
-    print(f"Starting monthly report generation for {month}/{year} at {datetime.now(pytz.timezone('Europe/Samara'))}")
-    params = build_monthly_params_for_date(year, month)
-    
-    # Инициализируем счетчики
-    total = Counter()
-    cs8 = Counter()
-    cs20 = Counter()
-    cs22 = Counter()
-    lead_agent = Counter()
-    allc = Counter()
-    sums = defaultdict(int)
-    cnts = defaultdict(int)
-    
-    # Получаем данные постранично
-    page = 1
-    while True:
-        try:
-            print(f"Получение страницы {page}...")
-            current_params = params + [("page", page), ("limit", PAGE_SIZE)]
-            r = requests.get(CALL_LIST_URL, params=current_params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-            r.raise_for_status()
-            items = r.json().get("items", [])
-            
-            if not items:
-                print(f"Страница {page} пуста, завершаем получение данных")
-                break
-                
-            print(f"Обработка {len(items)} звонков на странице {page}")
-            
-            # Обрабатываем звонки на текущей странице
-            for call in items:
-                oid = str(call.get("operator", {}).get("id") or "")
-                if oid in OPERATORS:
-                    allc[oid] += 1
-                    status_obj = call.get("client_status") or {}
-                    status = str(status_obj.get("id") or "")
-                    if status in STAT_FULL:
-                        total[oid] += 1
-                        td = call.get("talk_duration") or 0
-                        sums[oid] += td
-                        cnts[oid] += 1
-                    if status in CS8:
-                        cs8[oid] += 1
-                    if status in CS20:
-                        cs20[oid] += 1
-                    if status in CS22:
-                        cs22[oid] += 1
-                    if status in LEAD_AGENT:
-                        lead_agent[oid] += 1
-            
-            page += 1
-            
-        except requests.exceptions.Timeout:
-            print(f"Таймаут при получении страницы {page}")
-            break
-        except Exception as e:
-            print(f"Ошибка при получении страницы {page}: {str(e)}")
-            break
-
-    if not any(allc.values()):
-        error_msg = "Не удалось получить данные о звонках"
-        print(error_msg)
-        return error_msg
-
-    avg = {oid: (sums[oid] // cnts[oid] if cnts[oid] else 0) for oid in OPERATORS}
-
-    month_names = {
-        1: "январь", 2: "февраль", 3: "март", 4: "апрель",
-        5: "май", 6: "июнь", 7: "июль", 8: "август",
-        9: "сентябрь", 10: "октябрь", 11: "ноябрь", 12: "декабрь"
-    }
-    
-    lines = [f"*Месячный отчёт КЦ за {month_names[month]} {year}*"]
-    
-    for oid, name in OPERATORS.items():
-        lines.append(
-            f"{name}\n"
-            f"Всего звонков: {allc.get(oid,0)}\n"
-            f"Диалогов:        {total.get(oid,0)}\n"
-            f"Согласие:        {cs8.get(oid,0)}\n"
-            f"Перевод:         {cs20.get(oid,0)}\n"
-            f"Лид агент:       {lead_agent.get(oid,0)}\n"
-            f"Средн. время:    {avg.get(oid,0)}"
-        )
-    
-    text = "\n\n".join(lines)
-    
-    # Отправляем отчет в Telegram
-    success = False
-    for cid in CHAT_ID:
-        try:
-            print(f"Sending monthly report to chat {cid}")
-            asyncio.run(bot.send_message(chat_id=cid, text=text, parse_mode="Markdown"))
-            print(f"Successfully sent monthly report to chat {cid}")
-            success = True
-        except Exception as e:
-            print(f"Ошибка отправки месячного отчета в чат {cid}: {str(e)}")
-    
-    if not success:
-        error_msg = "Не удалось отправить отчет ни в один из чатов"
-        print(error_msg)
-        return error_msg
-        
-    print("Monthly report generation and sending completed")
-    return text
-
 sched = None
 
 def sync_yesterday():
@@ -880,10 +618,6 @@ def init_scheduler():
     global sched
     if sched is None:
         sched = BackgroundScheduler(timezone="Europe/Samara")
-        # Ежедневный отчет в 18:30
-        sched.add_job(send_report, 'cron', hour=18, minute=30)
-        # Месячный отчет в последний день месяца в 19:00
-        sched.add_job(send_monthly_report, 'cron', day='last', hour=19, minute=0)
         # Обновление списка активных проектов в 10:00
         sched.add_job(fetch_active_campaigns, 'cron', hour=10, minute=0)
         # Автосинхронизация вчерашнего дня в 00:10
@@ -1035,7 +769,7 @@ def stats():
     calls   = fetch_all_calls_details(requested_date=requested_date, operators_map=OPERATORS)
     operators_from_calls = extract_operators_from_calls(calls)
     operators_map = OPERATORS or operators_from_calls
-    total   = fetch_counts(STAT_FULL, requested_date=requested_date, operators_map=operators_map)
+    total_dialogs = defaultdict(int)
     cs8     = fetch_counts(CS8, requested_date=requested_date, operators_map=operators_map)
     cs20    = fetch_counts(CS20, requested_date=requested_date, operators_map=operators_map)
     lead_agent = fetch_counts(LEAD_AGENT, requested_date=requested_date, operators_map=operators_map)
@@ -1046,10 +780,10 @@ def stats():
     for c in calls:
         oid = str(c.get("operator",{}).get("id") or "")
         if not operators_map or oid in operators_map:
-            status_obj = c.get("client_status") or {}
-            status = str(status_obj.get("id") or "")
-            if status in STAT_FULL:
-                td = c.get("talk_duration") or 0
+            status = get_status_id(c)
+            td = get_talk_duration(c)
+            if status in STAT_FULL and td > 20:
+                total_dialogs[oid] += 1
                 sums[oid] += td
                 cnts[oid] += 1
     avg    = {oid:(sums[oid]//cnts[oid] if cnts[oid] else 0) for oid in operators_map}
@@ -1065,7 +799,7 @@ def stats():
         "status":    {oid: status.get(oid) for oid in operators_filtered},
         "all":       {oid: allc.get(oid, 0) for oid in operators_filtered},
         "line":      {oid: line_times.get(oid, "00:00:00") for oid in operators_filtered},
-        "total":     {oid: total.get(oid, 0) for oid in operators_filtered},
+        "total":     {oid: total_dialogs.get(oid, 0) for oid in operators_filtered},
         "cs8":       {oid: cs8.get(oid, 0) for oid in operators_filtered},
         "cs20":      {oid: cs20.get(oid, 0) for oid in operators_filtered},
         "lead_agent": {oid: lead_agent.get(oid, 0) for oid in operators_filtered},
@@ -1075,53 +809,6 @@ def stats():
         "new_noactive": new_noactive_tot,
         "server_time": int(time.time() * 1000)
     })
-
-@app.route('/send_report')
-def trigger_report():
-    try:
-        send_report()
-        return jsonify({"status": "success", "message": "Отчет успешно отправлен"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": f"Ошибка при отправке отчета: {str(e)}"}), 500
-
-@app.route('/send_monthly_report/<int:year>/<int:month>')
-def trigger_monthly_report(year, month):
-    try:
-        print(f"Начало обработки запроса месячного отчета для {year}/{month}")
-        
-        if not (1 <= month <= 12):
-            error_msg = "Месяц должен быть от 1 до 12"
-            print(error_msg)
-            return jsonify({"status": "error", "message": error_msg}), 400
-        
-        current_year = datetime.now().year
-        if not (2020 <= year <= current_year + 1):
-            error_msg = f"Год должен быть от 2020 до {current_year + 1}"
-            print(error_msg)
-            return jsonify({"status": "error", "message": error_msg}), 400
-            
-        print("Параметры валидны, начинаем формирование отчета")
-        text = send_monthly_report_for_date(year, month)
-        
-        if text.startswith("Не удалось получить данные"):
-            return jsonify({"status": "error", "message": text}), 500
-            
-        print("Отчет успешно сформирован и отправлен")
-        return jsonify({
-            "status": "success", 
-            "message": "Месячный отчет успешно отправлен",
-            "report": text
-        })
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        print(f"Ошибка при отправке месячного отчета: {str(e)}")
-        print(f"Детали ошибки:\n{error_details}")
-        return jsonify({
-            "status": "error", 
-            "message": f"Ошибка при отправке месячного отчета: {str(e)}",
-            "details": error_details
-        }), 500
 
 if __name__ == '__main__':
     init_db()
