@@ -1,119 +1,477 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8"/>
-  <title>Статистика работы КЦ за {{ today }}</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>INVEST AGREGATOR</title>
   <style>
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      color: #000;
-      font-weight: bold;
-      background: linear-gradient(45deg, #a8e063, #56ab2f, #8ec5fc);
-      background-size: 400% 400%;
-      animation: GradientBG 15s ease infinite;
+    :root{
+      --white: #ffffff;
+      --menu: rgba(0,0,0,0.35);
+      --panel: rgba(0,0,0,0.32);
+      --panel-2: rgba(0,0,0,0.24);
+      --line: rgba(255,255,255,0.20);
+      --line-2: rgba(255,255,255,0.12);
+      --hover: rgba(255,255,255,0.06);
+      --accent: rgba(255,255,255,0.9);
+      --muted: rgba(255,255,255,0.65);
+      --shadow: 0 18px 50px rgba(0,0,0,0.35);
+      --radius: 16px;
     }
-    @keyframes GradientBG {
-      0%   { background-position:   0% 50%; }
+
+    *{ box-sizing: border-box; }
+
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      color: var(--white);
+      height: 100vh;
+      overflow: hidden;
+      background: #0b0f0a;
+    }
+
+    .bg{
+      position:fixed;
+      inset:0;
+      background: linear-gradient(120deg,
+        #4fbf2a 0%,
+        #1e6c3b 40%,
+        #5aa8ff 100%
+      );
+      background-size: 220% 220%;
+      animation: gradientMove 10s ease-in-out infinite;
+      filter: saturate(1.12);
+    }
+
+    .bg::after{
+      content:"";
+      position:absolute;
+      inset:0;
+      background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px);
+      background-size: 7px 7px;
+      opacity: 0.10;
+      mix-blend-mode: overlay;
+      pointer-events:none;
+    }
+
+    @keyframes gradientMove{
+      0%   { background-position: 0% 50%; }
       50%  { background-position: 100% 50%; }
-      100% { background-position:   0% 50%; }
+      100% { background-position: 0% 50%; }
     }
-    header {
+    @keyframes pageIn{
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    body.page-out{
+      animation: none;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+    }
+    .wrap{
+      opacity: 0;
+      animation: pageIn 0.35s ease-out forwards;
+    }
+
+    .topbarWrap{
+      position: relative;
+      z-index: 3;
+    }
+
+    .topbar{
+      position:relative;
+      height: 70px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding: 0 18px;
+      background: var(--menu);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+      transition: transform 0.25s ease;
+    }
+
+    .topbar.hidden{
+      transform: translateY(-100%);
+    }
+
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      font-weight:800;
+      letter-spacing:0.5px;
+      text-transform: uppercase;
+      user-select:none;
+    }
+
+    .logoMark{
+      width:74px;
+      height:74px;
+      display:grid;
+      place-items:center;
+    }
+
+    .logoMark img{
+      width:64px;
+      height:64px;
+      object-fit: contain;
+    }
+
+    .topActions{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+
+    .pillBtn{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding: 9px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.18);
+      color: var(--white);
+      cursor:pointer;
+      transition: 0.2s ease;
+      user-select:none;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .pillBtn:hover{
+      transform: translateY(-1px);
+      background: rgba(0,0,0,0.26);
+      border-color: rgba(255,255,255,0.24);
+    }
+
+    .menuToggle{
+      position:absolute;
+      left:50%;
+      bottom:-12px;
+      transform: translateX(-50%);
+      width: 36px;
+      height: 22px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.10);
+      color: rgba(255,255,255,0.9);
+      cursor:pointer;
+      font-size: 14px;
+      line-height: 22px;
       text-align: center;
-      padding: 20px;
+      transition: 0.2s ease;
     }
-    header h1 {
-      margin: 0;
-      font-size: 2em;
+
+    .wrap{
+      position:relative;
+      z-index:2;
+      height: calc(100vh - 70px);
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      padding: 28px 14px 22px;
+      gap: 18px;
+      overflow: auto;
     }
-    .summary {
-      text-align: center;
-      font-size: 1.2em;
-      margin: 10px 0;
+
+    .titleBlock{
+      text-align:center;
+      width: min(900px, 96vw);
     }
-    table {
-      border-collapse: collapse;
-      width: 90%;
-      max-width: 900px;
-      margin: 0 auto 20px;
-      background: rgba(0,0,0,0.05);
-      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+
+    .branch{
+      font-size: 18px;
+      font-weight: 700;
+      opacity: 0.92;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
     }
-    th, td {
-      border: 1px solid rgba(0,0,0,0.2);
+
+    h1{
+      margin: 8px 0 12px;
+      font-size: 32px;
+      line-height: 1.15;
+      text-shadow: 0 10px 40px rgba(0,0,0,0.25);
+    }
+
+    .filters{
+      display:flex;
+      align-items:center;
+      gap:10px;
       padding: 8px 12px;
-      text-align: center;
-      word-break: break-word;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.18);
+      width: max-content;
+      margin: 0 auto;
+      backdrop-filter: blur(8px);
     }
-    th {
-      background: rgba(0,0,0,0.1);
+
+    .filters label{
+      font-weight:700;
+      letter-spacing:0.3px;
+      color: var(--muted);
     }
-    tbody tr:hover {
-      background: rgba(0,0,0,0.1);
+
+    .filters input[type="date"]{
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.28);
+      color: var(--white);
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-weight: 600;
+      outline: none;
     }
-    .logo-container {
-      text-align: center;
-      margin: 20px 0;
+
+    .filters button{
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.22);
+      color: var(--white);
+      padding: 6px 12px;
+      border-radius: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: 0.2s ease;
     }
-    .logo-container img {
-      width: 300px;
-      height: auto;
+
+    .filters button:hover{
+      transform: translateY(-1px);
+      background: rgba(0,0,0,0.30);
+    }
+
+    .tableWrap{
+      width: min(1020px, 96vw);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+      overflow:hidden;
+    }
+
+    .tableHead{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(0,0,0,0.24);
+    }
+
+    .tableHead .left{
+      display:flex;
+      align-items:center;
+      gap: 10px;
+      font-weight:800;
+      letter-spacing:0.4px;
+    }
+
+    .tableHead .right{
+      display:flex;
+      gap: 8px;
+      align-items:center;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    table{
+      width:100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td{
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line-2);
+      white-space: nowrap;
+      text-align: left;
+    }
+
+    th{
+      font-weight:800;
+      opacity:0.95;
+      background: rgba(0,0,0,0.20);
+      border-bottom: 1px solid var(--line);
+    }
+
+    tbody tr:hover{
+      background: var(--hover);
+    }
+
+    .indicator{
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .logoWrap{
+      position: relative;
+      display: inline-block;
+      width: 180px;
+      height: 180px;
+    }
+
+    .logoRing{
+      position: absolute;
+      inset: 0;
+      transform: rotate(-90deg);
+    }
+
+    #ring-progress{
+      transition: stroke-dashoffset 1s linear;
+      stroke: rgba(255,255,255,0.95);
+    }
+
+    .logoWrap img{
+      position: absolute;
+      inset: 24px;
+      width: calc(100% - 48px);
+      height: calc(100% - 48px);
+      object-fit: contain;
+      border-radius: 50%;
+      background: transparent;
+    }
+
+    .switchTimer{
+      font-size: 14px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    @media (max-width: 860px){
+      .tableHead{
+        flex-direction:column;
+        gap:10px;
+        align-items:flex-start;
+      }
+      .tableHead .right{
+        justify-content:flex-start;
+      }
+      table{
+        font-size: 13px;
+      }
     }
   </style>
 </head>
 <body>
-  <header>
-    <h1>Статистика работы КЦ за {{ today }}</h1>
-  </header>
+  <div class="bg"></div>
 
-  <div class="summary" id="new-numbers">
-    <!-- Сюда будет вставлено: "Новых номеров – X" -->
+  <div class="topbarWrap">
+    <div id="topbar" class="topbar">
+      <div class="brand">
+        <div class="logoMark"><img src="{{ url_for('static', filename='logo.png') }}" alt="Логотип"></div>
+        <div>INVEST AGREGATOR</div>
+      </div>
+      <div class="topActions">
+        <a class="pillBtn" href="/reports">Отчётность</a>
+      </div>
+      <button id="topbar-toggle" class="menuToggle" aria-label="Скрыть меню">▼</button>
+    </div>
   </div>
 
-  <div class="summary" id="new-numbers-noactive">
-    <!-- Сюда будет вставлено: "Новых номеров неактивных проектов – X" -->
-  </div>
+  <div class="wrap">
+    <div class="titleBlock">
+      <div class="branch" id="branch-name"></div>
+      <h1>Статистика работы КЦ за <span id="title-date">{{ today }}</span></h1>
+      <div class="filters">
+        <label for="stats-date">Дата:</label>
+        <input id="stats-date" type="date">
+        <button id="stats-apply">Показать</button>
+      </div>
+    </div>
 
-  <table>
-    <thead>
-      <tr>
-        <th>Оператор</th>
-        <th>Всего звонков</th>
-        <th>Диалогов</th>
-        <th>Перевод</th>
-        <th>Согласие</th>
-        <th>Агент. Согласие</th>
-        <th>Среднее, сек</th>
-      </tr>
-    </thead>
-    <tbody id="stats-body"></tbody>
-  </table>
+    <div class="tableWrap">
+      <div class="tableHead">
+        <div class="left">Статистика операторов</div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Оператор</th>
+            <th>Всего звонков</th>
+            <th>Диалогов</th>
+            <th>Перевод</th>
+            <th>Согласие</th>
+            <th>Агент. Согласие</th>
+            <th>Среднее, сек</th>
+          </tr>
+        </thead>
+        <tbody id="stats-body"></tbody>
+      </table>
+    </div>
 
-  <div class="logo-container">
-    <img src="{{ url_for('static', filename='logo.png') }}" alt="Логотип">
+    <div class="indicator">
+      <div class="logoWrap">
+        <svg class="logoRing" viewBox="0 0 200 200" aria-hidden="true">
+          <circle cx="100" cy="100" r="82" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="10"></circle>
+          <circle id="ring-progress" cx="100" cy="100" r="82" fill="none" stroke-linecap="round" stroke-width="10"></circle>
+        </svg>
+        <img src="{{ url_for('static', filename='logo.png') }}" alt="Логотип">
+      </div>
+      <div id="switch-timer" class="switchTimer"></div>
+    </div>
   </div>
 
   <script>
+    const todayText = "{{ today }}";
+
+    function toInputDate(value) {
+      const m = value.match(/^(\d{2})[.\-](\d{2})[.\-](\d{4})$/);
+      if (!m) return '';
+      return `${m[3]}-${m[2]}-${m[1]}`;
+    }
+
+    function toApiDate(value) {
+      const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return '';
+      return `${m[3]}-${m[2]}-${m[1]}`;
+    }
+
+    function formatDisplayDate(value) {
+      const api = toApiDate(value);
+      return api || todayText;
+    }
+
+    function getSelectedDate() {
+      const input = document.getElementById('stats-date');
+      return input.value || toInputDate(todayText);
+    }
+
+    let serverOffsetMs = 0;
+
     async function loadStats() {
-      const res   = await fetch('/stats');
-      const data  = await res.json();
+      const selected = getSelectedDate();
+      const apiDate = toApiDate(selected);
+      const url = apiDate ? `/stats?date=${encodeURIComponent(apiDate)}` : '/stats';
+      const res = await fetch(url);
+      const data = await res.json();
       const tbody = document.getElementById('stats-body');
       tbody.innerHTML = '';
 
-      // выводим общее число новых номеров
-      document.getElementById('new-numbers').textContent =
-        `Новых номеров – ${data.new}`;
-      document.getElementById('new-numbers-noactive').textContent =
-        `Новых номеров неактивных проектов – ${data.new_noactive}`;
+      if (typeof data.server_time === 'number') {
+        serverOffsetMs = data.server_time - Date.now();
+      }
 
-      Object.entries(data.operators).forEach(([id,name]) => {
-        const all   = data.all[id]   || 0;
+      const displayDate = formatDisplayDate(selected);
+      document.getElementById('title-date').textContent = displayDate;
+
+      Object.entries(data.operators).forEach(([id, name]) => {
+        const all = data.all[id] || 0;
         const total = data.total[id] || 0;
-        const cs20  = data.cs20[id]  || 0;
-        const cs8   = data.cs8[id]   || 0;
-        const cs22  = data.cs22[id]  || 0;
-        const avg   = data.avg[id]   || 0;
-        if (all===0 && total===0 && cs20===0 && cs8===0 && cs22===0 && avg===0) return;
+        const cs20 = data.cs20[id] || 0;
+        const cs8 = data.cs8[id] || 0;
+        const cs22 = data.cs22[id] || 0;
+        const avg = data.avg[id] || 0;
+        if (all === 0 && total === 0 && cs20 === 0 && cs8 === 0 && cs22 === 0 && avg === 0) return;
 
         tbody.insertAdjacentHTML('beforeend', `
           <tr>
@@ -129,8 +487,64 @@
       });
     }
 
-    loadStats();
-    setInterval(loadStats, 3000);
+    document.getElementById('stats-date').value = toInputDate(todayText);
+    document.getElementById('stats-apply').addEventListener('click', loadStats);
+
+    function scheduleStatsRefresh() {
+      const serverNow = Date.now() + serverOffsetMs;
+      const msToNextMinute = 60000 - (serverNow % 60000);
+      setTimeout(() => {
+        loadStats();
+        setInterval(loadStats, 60000);
+      }, msToNextMinute);
+    }
+
+    loadStats().then(scheduleStatsRefresh);
+
+    const branches = ["УЛЬЯНОВСКИЙ ФИЛИАЛ", "МОСКОВСКИЙ ФИЛИАЛ"];
+    const branchEl = document.getElementById('branch-name');
+    const timerEl = document.getElementById('switch-timer');
+    const ring = document.getElementById('ring-progress');
+    const cycleSeconds = 60;
+    const radius = 82;
+    const circumference = 2 * Math.PI * radius;
+
+    ring.style.strokeDasharray = `${circumference} ${circumference}`;
+    ring.style.strokeDashoffset = '0';
+
+    function updateBranchTicker() {
+      const serverNow = Date.now() + serverOffsetMs;
+      const seconds = Math.floor(serverNow / 1000) % 60;
+      const minutes = Math.floor(serverNow / 60000);
+      const secondsLeft = seconds === 0 ? 60 : 60 - seconds;
+      const progress = seconds / 60;
+      const branchIndex = minutes % branches.length;
+
+      branchEl.textContent = branches[branchIndex];
+      ring.style.strokeDashoffset = `${circumference * progress}`;
+      timerEl.textContent = `Смена филиала через ${secondsLeft} сек`;
+    }
+
+    updateBranchTicker();
+    setInterval(updateBranchTicker, 1000);
+
+    const topbar = document.getElementById('topbar');
+    const topbarToggle = document.getElementById('topbar-toggle');
+    topbarToggle.addEventListener('click', () => {
+      topbar.classList.toggle('hidden');
+      topbarToggle.textContent = topbar.classList.contains('hidden') ? '▲' : '▼';
+    });
+
+    document.querySelectorAll('a[href]').forEach((link) => {
+      if (link.origin !== window.location.origin) return;
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        document.body.classList.add('page-out');
+        setTimeout(() => {
+          window.location.href = link.href;
+        }, 250);
+      });
+    });
   </script>
 </body>
 </html>

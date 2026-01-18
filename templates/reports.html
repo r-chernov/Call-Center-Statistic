@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>INVEST AGREGATOR - Отчётность</title>
+
+  <style>
+    :root{
+      --white: #ffffff;
+      --menu: rgba(0,0,0,0.35);
+      --panel: rgba(0,0,0,0.32);
+      --panel-2: rgba(0,0,0,0.24);
+      --line: rgba(255,255,255,0.20);
+      --line-2: rgba(255,255,255,0.12);
+      --hover: rgba(255,255,255,0.06);
+      --accent: rgba(255,255,255,0.9);
+      --muted: rgba(255,255,255,0.65);
+      --shadow: 0 18px 50px rgba(0,0,0,0.35);
+      --radius: 16px;
+    }
+
+    *{ box-sizing:border-box; }
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      color: var(--white);
+      height: 100vh;
+      overflow: hidden;
+      background: #0b0f0a;
+    }
+
+    /* Живой фон */
+    .bg{
+      position:fixed;
+      inset:0;
+      background: linear-gradient(120deg,
+        #4fbf2a 0%,
+        #1e6c3b 40%,
+        #5aa8ff 100%
+      );
+      background-size: 220% 220%;
+      animation: gradientMove 10s ease-in-out infinite;
+      filter: saturate(1.12);
+    }
+
+    /* Лёгкий шум, чтобы фон был “живой” */
+    .bg::after{
+      content:"";
+      position:absolute;
+      inset:0;
+      background-image:
+        radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px);
+      background-size: 7px 7px;
+      opacity: 0.10;
+      mix-blend-mode: overlay;
+      pointer-events:none;
+    }
+
+    @keyframes gradientMove{
+      0%   { background-position: 0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+    @keyframes pageIn{
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    body.page-out{
+      animation: none;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+    }
+    .wrap{
+      opacity: 0;
+      animation: pageIn 0.35s ease-out forwards;
+    }
+
+    /* Верхнее меню */
+    .topbar{
+      position:relative;
+      z-index:2;
+      height: 70px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding: 0 18px;
+      background: var(--menu);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+    }
+
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      font-weight:800;
+      letter-spacing:0.5px;
+      text-transform: uppercase;
+      user-select:none;
+    }
+
+    .logoMark{
+      width:74px;
+      height:74px;
+      display:grid;
+      place-items:center;
+    }
+
+    .logoMark img{
+      width:64px;
+      height:64px;
+      object-fit: contain;
+    }
+
+    .topActions{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+
+    .pillBtn{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding: 9px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.18);
+      color: var(--white);
+      cursor:pointer;
+      transition: 0.2s ease;
+      user-select:none;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .pillBtn:hover{
+      transform: translateY(-1px);
+      background: rgba(0,0,0,0.26);
+      border-color: rgba(255,255,255,0.24);
+    }
+
+    /* Контент */
+    .wrap{
+      position:relative;
+      z-index:2;
+      height: calc(100vh - 70px);
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      padding: 34px 14px 22px;
+      gap: 18px;
+    }
+
+    .titleBlock{
+      text-align:center;
+      width: min(900px, 96vw);
+    }
+
+    .branch{
+      font-size: 18px;
+      font-weight: 700;
+      opacity: 0.92;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+
+    h1{
+      margin: 8px 0 12px;
+      font-size: 32px;
+      line-height: 1.15;
+      text-shadow: 0 10px 40px rgba(0,0,0,0.25);
+    }
+
+    /* Фильтры периода */
+    .filters{
+      width: min(920px, 96vw);
+      display:flex;
+      justify-content:center;
+      flex-wrap:wrap;
+      gap: 10px;
+    }
+
+    .chip{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding: 10px 12px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.22);
+      border: 1px solid rgba(255,255,255,0.18);
+      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow);
+    }
+
+    .chipLabel{
+      font-weight:700;
+      color: var(--accent);
+      opacity:0.95;
+    }
+
+    .chip input,
+    .chip select{
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.18);
+      color: var(--white);
+      padding: 8px 10px;
+      border-radius: 999px;
+      outline:none;
+      min-width: 140px;
+    }
+
+    .chip input::-webkit-calendar-picker-indicator{
+      filter: invert(1);
+      opacity: 0.9;
+      cursor:pointer;
+    }
+
+    .chip button{
+      background: rgba(0,0,0,0.28);
+      border: 1px solid rgba(255,255,255,0.20);
+      color: var(--white);
+      padding: 8px 14px;
+      border-radius: 999px;
+      cursor:pointer;
+      font-weight:700;
+      transition: 0.2s ease;
+    }
+
+    .chip button:hover{
+      background: rgba(0,0,0,0.38);
+      transform: translateY(-1px);
+    }
+
+    .quickRow{
+      display:flex;
+      gap: 8px;
+      flex-wrap:wrap;
+      justify-content:center;
+      width: min(920px, 96vw);
+      opacity:0.98;
+      margin-top: 2px;
+    }
+
+    .quickBtn{
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.18);
+      color: var(--white);
+      cursor:pointer;
+      transition: 0.2s ease;
+      font-weight:700;
+    }
+
+    .quickBtn:hover{
+      background: rgba(0,0,0,0.26);
+      transform: translateY(-1px);
+    }
+
+    /* Таблица */
+    .tableWrap{
+      width: min(1020px, 96vw);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+      overflow:hidden;
+    }
+
+    .tableHead{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(0,0,0,0.24);
+    }
+
+    .tableHead .left{
+      display:flex;
+      align-items:center;
+      gap: 10px;
+      font-weight:800;
+      letter-spacing:0.4px;
+    }
+
+    .tableHead .right{
+      display:flex;
+      gap: 8px;
+      align-items:center;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+
+    .miniBtn{
+      padding: 7px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.16);
+      background: rgba(255,255,255,0.06);
+      color: var(--white);
+      cursor:pointer;
+      transition: 0.2s ease;
+      font-weight:700;
+    }
+    .miniBtn:hover{
+      background: rgba(255,255,255,0.10);
+      transform: translateY(-1px);
+    }
+    .miniBtn:disabled{
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    table{
+      width:100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td{
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line-2);
+      white-space: nowrap;
+    }
+
+    th{
+      text-align:left;
+      font-weight:800;
+      opacity:0.95;
+      background: rgba(0,0,0,0.20);
+      border-bottom: 1px solid var(--line);
+    }
+
+    tbody tr:hover{
+      background: var(--hover);
+    }
+
+    .muted{
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.08);
+      font-weight:800;
+      font-size: 12px;
+    }
+
+    .kpiRow{
+      display:flex;
+      gap: 10px;
+      flex-wrap:wrap;
+      justify-content:center;
+      width: min(1020px, 96vw);
+      margin-top: 6px;
+    }
+
+    .kpi{
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      min-width: 170px;
+      box-shadow: 0 12px 38px rgba(0,0,0,0.25);
+      backdrop-filter: blur(10px);
+    }
+
+    .kpi .kTitle{
+      font-weight:800;
+      opacity:0.9;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+
+    .kpi .kVal{
+      margin-top: 6px;
+      font-size: 22px;
+      font-weight: 900;
+      letter-spacing: 0.2px;
+    }
+
+    /* адаптив */
+    @media (max-width: 680px){
+      h1{ font-size: 24px; }
+      .kpi{ min-width: 150px; }
+      th, td{ padding: 10px 10px; font-size: 13px; }
+      .tableHead{ flex-direction:column; gap:10px; align-items:flex-start; }
+      .tableHead .right{ justify-content:flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logoMark"><img src="/static/logo.png" alt="Логотип"></div>
+      <div>INVEST AGREGATOR</div>
+    </div>
+
+    <div class="topActions">
+      <a class="pillBtn" href="/">Дашборд</a>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="titleBlock">
+      <div class="branch">ВЫБЕРИТЕ ФИЛИАЛ</div>
+      <h1>Отчётность КЦ за период</h1>
+    </div>
+
+    <!-- Фильтры -->
+    <div class="filters">
+      <div class="chip">
+        <div class="chipLabel">Период</div>
+        <input type="date" id="dateFrom" value=""/>
+        <span class="muted">→</span>
+        <input type="date" id="dateTo" value=""/>
+        <button id="buildBtn">Сформировать</button>
+      </div>
+
+      <div class="chip">
+        <div class="chipLabel">Филиал</div>
+        <select id="branch">
+          <option>Ульяновск</option>
+          <option>Москва</option>
+          <option selected>Общие показатели</option>
+        </select>
+      </div>
+
+    </div>
+
+    <div class="quickRow">
+      <button class="quickBtn" data-range="today">Сегодня</button>
+      <button class="quickBtn" data-range="yesterday">Вчера</button>
+      <button class="quickBtn" data-range="week">Неделя</button>
+      <button class="quickBtn" data-range="month">Месяц</button>
+    </div>
+
+    <!-- KPI -->
+    <section class="kpiRow">
+      <div class="kpi">
+        <div class="kTitle">Всего звонков</div>
+        <div class="kVal" id="kTotal">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kTitle">Дозвон %</div>
+        <div class="kVal" id="kReach">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kTitle">Согласие</div>
+        <div class="kVal" id="kAgree">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kTitle">Среднее, сек</div>
+        <div class="kVal" id="kAvg">—</div>
+      </div>
+    </section>
+
+    <!-- Таблица отчёта -->
+    <section class="tableWrap">
+      <div class="tableHead">
+        <div class="left">
+          <span>Отчёт по операторам</span>
+          <span class="badge" id="periodBadge">Период не выбран</span>
+        </div>
+        <div class="right">
+          <a class="miniBtn" id="exportXlsx" href="#">Скачать Excel</a>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Оператор</th>
+            <th>Всего</th>
+            <th>Диалогов</th>
+            <th>Перевод</th>
+            <th>Согласие</th>
+            <th>Агент. согласие</th>
+            <th>Среднее, сек</th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <tr>
+            <td class="muted" colspan="7">Нет данных</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+  </main>
+
+  <script>
+    const dateFrom = document.getElementById("dateFrom");
+    const dateTo = document.getElementById("dateTo");
+    const badge = document.getElementById("periodBadge");
+
+    function fmt(d){
+      const dd = String(d.getDate()).padStart(2,"0");
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const yy = d.getFullYear();
+      return `${dd}.${mm}.${yy}`;
+    }
+
+    function toApi(value){
+      const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return "";
+      return `${m[3]}-${m[2]}-${m[1]}`;
+    }
+
+    function toIso(value){
+      const m = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (!m) return "";
+      return `${m[3]}-${m[2]}-${m[1]}`;
+    }
+
+    function setBadge(startIso, endIso){
+      if (!startIso || !endIso) {
+        badge.textContent = "Период не выбран";
+        return;
+      }
+      badge.textContent = `${fmt(new Date(startIso))} - ${fmt(new Date(endIso))}`;
+    }
+
+    function renderTable(rows){
+      const tbody = document.getElementById("tbody");
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td class=\"muted\" colspan=\"7\">Нет данных</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map(r => `
+        <tr>
+          <td><strong>${r.operator_name}</strong></td>
+          <td>${r.all}</td>
+          <td>${r.total}</td>
+          <td>${r.cs20}</td>
+          <td>${r.cs8}</td>
+          <td>${r.cs22}</td>
+          <td>${r.avg}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderTotals(t){
+      document.getElementById("kTotal").textContent = t.all ?? "—";
+      document.getElementById("kReach").textContent = (t.reach ?? "—") + (t.reach !== undefined ? "%" : "");
+      document.getElementById("kAgree").textContent = t.cs8 ?? "—";
+      document.getElementById("kAvg").textContent = t.avg ?? "—";
+    }
+
+    function updateExportLink(startIso, endIso){
+      const link = document.getElementById("exportXlsx");
+      const url = new URL("/report/export", window.location.origin);
+      url.searchParams.set("format", "xlsx");
+      if (startIso && endIso) {
+        url.searchParams.set("start", toApi(startIso));
+        url.searchParams.set("end", toApi(endIso));
+      }
+      link.href = url.toString();
+    }
+
+    async function fetchReport(startIso, endIso){
+      const url = new URL("/report/data", window.location.origin);
+      if (startIso && endIso) {
+        url.searchParams.set("start", toApi(startIso));
+        url.searchParams.set("end", toApi(endIso));
+      }
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.range) {
+        const start = toIso(data.range.start);
+        const end = toIso(data.range.end);
+        dateFrom.value = start;
+        dateTo.value = end;
+        setBadge(start, end);
+        updateExportLink(start, end);
+      } else {
+        setBadge("", "");
+        updateExportLink("", "");
+      }
+      renderTable(data.rows || []);
+      renderTotals(data.totals || {});
+    }
+
+    document.querySelectorAll(".quickBtn").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const now = new Date();
+        let f = new Date(now);
+        let t = new Date(now);
+        const type = btn.dataset.range;
+
+        if(type === "today"){
+          // ok
+        } else if(type === "yesterday"){
+          f.setDate(f.getDate()-1);
+          t.setDate(t.getDate()-1);
+        } else if(type === "week"){
+          f.setDate(f.getDate()-6);
+        } else if(type === "month"){
+          f.setDate(f.getDate()-29);
+        } else {
+          return;
+        }
+        const iso = x => x.toISOString().slice(0,10);
+        const startIso = iso(f);
+        const endIso = iso(t);
+        dateFrom.value = startIso;
+        dateTo.value = endIso;
+        fetchReport(startIso, endIso);
+      });
+    });
+
+    document.getElementById("buildBtn").addEventListener("click", ()=>{
+      fetchReport(dateFrom.value, dateTo.value);
+    });
+
+    fetchReport();
+
+    document.querySelectorAll('a[href]').forEach((link) => {
+      if (link.origin !== window.location.origin) return;
+      if (link.id === 'exportXlsx') return;
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        document.body.classList.add('page-out');
+        setTimeout(() => {
+          window.location.href = link.href;
+        }, 250);
+      });
+    });
+  </script>
+</body>
+</html>

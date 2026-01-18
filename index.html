@@ -63,6 +63,11 @@
 <body>
   <header>
     <h1>Статистика работы КЦ за {{ today }}</h1>
+    <div class="summary">
+      <label for="stats-date">Дата:</label>
+      <input id="stats-date" type="date">
+      <button id="stats-apply">Показать</button>
+    </div>
   </header>
 
   <div class="summary" id="new-numbers">
@@ -89,8 +94,30 @@
   </div>
 
   <script>
+    const todayText = "{{ today }}";
+
+    function toInputDate(value) {
+      const m = value.match(/^(\d{2})[.\-](\d{2})[.\-](\d{4})$/);
+      if (!m) return '';
+      return `${m[3]}-${m[2]}-${m[1]}`;
+    }
+
+    function toApiDate(value) {
+      const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return '';
+      return `${m[3]}-${m[2]}-${m[1]}`;
+    }
+
+    function getSelectedDate() {
+      const input = document.getElementById('stats-date');
+      return input.value || toInputDate(todayText);
+    }
+
     async function loadStats() {
-      const res   = await fetch('/stats');
+      const selected = getSelectedDate();
+      const apiDate = toApiDate(selected);
+      const url = apiDate ? `/stats?date=${encodeURIComponent(apiDate)}` : '/stats';
+      const res   = await fetch(url);
       const data  = await res.json();
       const tbody = document.getElementById('stats-body');
       tbody.innerHTML = '';
@@ -122,6 +149,9 @@
         `);
       });
     }
+
+    document.getElementById('stats-date').value = toInputDate(todayText);
+    document.getElementById('stats-apply').addEventListener('click', loadStats);
 
     loadStats();
     setInterval(loadStats, 3000);

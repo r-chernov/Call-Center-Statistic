@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>INVEST AGREGATOR - Админ</title>
+  <style>
+    :root{
+      --white: #ffffff;
+      --menu: rgba(0,0,0,0.35);
+      --panel: rgba(0,0,0,0.32);
+      --panel-2: rgba(0,0,0,0.24);
+      --line: rgba(255,255,255,0.20);
+      --line-2: rgba(255,255,255,0.12);
+      --hover: rgba(255,255,255,0.06);
+      --muted: rgba(255,255,255,0.65);
+      --shadow: 0 18px 50px rgba(0,0,0,0.35);
+      --radius: 16px;
+    }
+
+    *{ box-sizing: border-box; }
+
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      color: var(--white);
+      height: 100vh;
+      overflow: hidden;
+      background: #0b0f0a;
+    }
+
+    .bg{
+      position:fixed;
+      inset:0;
+      background: linear-gradient(120deg,
+        #4fbf2a 0%,
+        #1e6c3b 40%,
+        #5aa8ff 100%
+      );
+      background-size: 220% 220%;
+      animation: gradientMove 10s ease-in-out infinite;
+      filter: saturate(1.12);
+    }
+
+    .bg::after{
+      content:"";
+      position:absolute;
+      inset:0;
+      background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px);
+      background-size: 7px 7px;
+      opacity: 0.10;
+      mix-blend-mode: overlay;
+      pointer-events:none;
+    }
+
+    @keyframes gradientMove{
+      0%   { background-position: 0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    .topbar{
+      position:relative;
+      z-index:2;
+      height: 70px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding: 0 18px;
+      background: var(--menu);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+    }
+
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      font-weight:800;
+      letter-spacing:0.5px;
+      text-transform: uppercase;
+      user-select:none;
+    }
+
+    .logoMark{
+      width:74px;
+      height:74px;
+      display:grid;
+      place-items:center;
+    }
+
+    .logoMark img{
+      width:64px;
+      height:64px;
+      object-fit: contain;
+    }
+
+    .pillBtn{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding: 9px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.18);
+      color: var(--white);
+      cursor:pointer;
+      transition: 0.2s ease;
+      user-select:none;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .pillBtn:hover{
+      transform: translateY(-1px);
+      background: rgba(0,0,0,0.26);
+      border-color: rgba(255,255,255,0.24);
+    }
+
+    .wrap{
+      position:relative;
+      z-index:2;
+      height: calc(100vh - 70px);
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      padding: 24px 14px 22px;
+      gap: 18px;
+      overflow: auto;
+    }
+
+    .panel{
+      width: min(1020px, 96vw);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+      padding: 18px;
+    }
+
+    .row{
+      display:flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items:center;
+    }
+
+    label{ color: var(--muted); font-weight: 700; }
+
+    input[type="date"],
+    input[type="month"]{
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.28);
+      color: var(--white);
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-weight: 600;
+      outline: none;
+    }
+
+    .btn{
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.22);
+      color: var(--white);
+      padding: 6px 12px;
+      border-radius: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: 0.2s ease;
+    }
+
+    .btn:hover{ transform: translateY(-1px); background: rgba(0,0,0,0.30); }
+
+    .grid{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 14px;
+    }
+
+    .list{
+      background: var(--panel-2);
+      border: 1px solid var(--line-2);
+      border-radius: 12px;
+      padding: 12px;
+      min-height: 120px;
+      max-height: 260px;
+      overflow: auto;
+      font-size: 13px;
+      white-space: pre-wrap;
+    }
+
+    .title{
+      font-size: 20px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .muted{ color: var(--muted); }
+    .calendar{
+      margin-top: 16px;
+      background: var(--panel-2);
+      border: 1px solid var(--line-2);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .calendar-header{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .calendar-grid{
+      display:grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 6px;
+      font-size: 12px;
+    }
+    .cal-cell{
+      text-align:center;
+      padding: 8px 0;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      user-select: none;
+    }
+    .cal-head{
+      color: var(--muted);
+      font-weight: 700;
+      cursor: default;
+    }
+    .cal-empty{
+      cursor: default;
+      opacity: 0.2;
+    }
+    .cal-available{
+      background: rgba(0, 0, 0, 0.25);
+      border-color: rgba(255,255,255,0.18);
+    }
+    .cal-missing{
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255,255,255,0.08);
+    }
+    .cal-selected{
+      outline: 2px solid rgba(255,255,255,0.8);
+    }
+    .legend{
+      display:flex;
+      gap: 12px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .legend span{
+      display:inline-flex;
+      align-items:center;
+      gap: 6px;
+    }
+    .legend i{
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      display:inline-block;
+    }
+    .lg-available{ background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255,255,255,0.18); }
+    .lg-missing{ background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255,255,255,0.08); }
+  </style>
+</head>
+<body>
+  <div class="bg"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logoMark"><img src="/static/logo.png" alt="Логотип"></div>
+      <div>INVEST AGREGATOR</div>
+    </div>
+    <a class="pillBtn" href="/">Дашборд</a>
+  </header>
+
+  <main class="wrap">
+    <section class="panel">
+      <div class="title">Админ синхронизация</div>
+      <div class="row">
+        <label for="start">Период</label>
+        <input type="date" id="start">
+        <span class="muted">→</span>
+        <input type="date" id="end">
+        <button class="btn" id="refresh">Показать</button>
+        <button class="btn" id="sync">Синхронизировать пропуски</button>
+        <button class="btn" id="sync-day">Синхронизировать день</button>
+      </div>
+      <div class="grid">
+        <div>
+          <div class="title">Есть в базе</div>
+          <div class="list" id="available">—</div>
+        </div>
+        <div>
+          <div class="title">Нет в базе</div>
+          <div class="list" id="missing">—</div>
+        </div>
+      </div>
+      <div class="calendar">
+        <div class="calendar-header">
+          <div class="title">Календарь</div>
+          <div class="row">
+            <label for="month">Месяц</label>
+            <input type="month" id="month">
+          </div>
+        </div>
+        <div class="calendar-grid" id="calendar"></div>
+        <div class="legend">
+          <span><i class="lg-available"></i> есть в базе</span>
+          <span><i class="lg-missing"></i> нет в базе</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || '';
+    const startInput = document.getElementById('start');
+    const endInput = document.getElementById('end');
+
+    function toIso(dateStr) {
+      const m = dateStr.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (!m) return '';
+      return `${m[3]}-${m[2]}-${m[1]}`;
+    }
+
+    function toApi(value) {
+      const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return '';
+      return `${m[3]}-${m[2]}-${m[1]}`;
+    }
+
+    let selectedDate = "";
+
+    async function loadRanges() {
+      const start = toApi(startInput.value);
+      const end = toApi(endInput.value);
+      const url = new URL('/admin/db', window.location.origin);
+      if (token) url.searchParams.set('token', token);
+      if (start && end) {
+        url.searchParams.set('start', start);
+        url.searchParams.set('end', end);
+      }
+      const res = await fetch(url);
+      if (!res.ok) {
+        document.getElementById('available').textContent = 'Нет доступа';
+        document.getElementById('missing').textContent = 'Нет доступа';
+        return;
+      }
+      const data = await res.json();
+      document.getElementById('available').textContent = (data.available || []).join(', ') || '—';
+      document.getElementById('missing').textContent = (data.missing || []).join(', ') || '—';
+
+      if (!startInput.value && data.available && data.available.length) {
+        startInput.value = toIso(data.available[0]);
+        endInput.value = toIso(data.available[data.available.length - 1]);
+      }
+
+      return data;
+    }
+
+    function daysInMonth(year, month) {
+      return new Date(year, month + 1, 0).getDate();
+    }
+
+    function renderCalendar(year, month, available, missing) {
+      const grid = document.getElementById('calendar');
+      const week = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+      grid.innerHTML = '';
+      week.forEach(d => {
+        const cell = document.createElement('div');
+        cell.textContent = d;
+        cell.className = 'cal-cell cal-head';
+        grid.appendChild(cell);
+      });
+
+      const first = new Date(year, month, 1);
+      const startDay = (first.getDay() + 6) % 7;
+      for (let i = 0; i < startDay; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'cal-cell cal-empty';
+        grid.appendChild(cell);
+      }
+
+      const total = daysInMonth(year, month);
+      const availableSet = new Set(available);
+      const missingSet = new Set(missing);
+
+      for (let day = 1; day <= total; day++) {
+        const dt = new Date(year, month, day);
+        const dd = String(day).padStart(2, '0');
+        const mm = String(month + 1).padStart(2, '0');
+        const yyyy = String(year);
+        const api = `${dd}-${mm}-${yyyy}`;
+        const iso = `${yyyy}-${mm}-${dd}`;
+        const cell = document.createElement('div');
+        cell.textContent = day;
+        cell.className = 'cal-cell';
+        if (availableSet.has(api)) {
+          cell.classList.add('cal-available');
+        } else if (missingSet.has(api)) {
+          cell.classList.add('cal-missing');
+        }
+        if (selectedDate === iso) {
+          cell.classList.add('cal-selected');
+        }
+        cell.addEventListener('click', () => {
+          selectedDate = iso;
+          startInput.value = iso;
+          endInput.value = iso;
+          renderCalendar(year, month, available, missing);
+        });
+        grid.appendChild(cell);
+      }
+    }
+
+    async function loadMonthCalendar() {
+      const monthInput = document.getElementById('month');
+      if (!monthInput.value) {
+        const now = new Date();
+        monthInput.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      }
+      const [y, m] = monthInput.value.split('-').map(Number);
+      const start = `01-${String(m).padStart(2, '0')}-${y}`;
+      const end = `${String(daysInMonth(y, m - 1)).padStart(2, '0')}-${String(m).padStart(2, '0')}-${y}`;
+      const url = new URL('/admin/db', window.location.origin);
+      if (token) url.searchParams.set('token', token);
+      url.searchParams.set('start', start);
+      url.searchParams.set('end', end);
+      const res = await fetch(url);
+      const data = await res.json();
+      renderCalendar(y, m - 1, data.available || [], data.missing || []);
+    }
+
+    document.getElementById('refresh').addEventListener('click', async () => {
+      await loadRanges();
+      await loadMonthCalendar();
+    });
+    document.getElementById('sync').addEventListener('click', async () => {
+      const start = toApi(startInput.value);
+      const end = toApi(endInput.value);
+      if (!start || !end) return;
+      const url = new URL('/admin/sync', window.location.origin);
+      if (token) url.searchParams.set('token', token);
+      url.searchParams.set('start', start);
+      url.searchParams.set('end', end);
+      await fetch(url);
+      await loadRanges();
+      await loadMonthCalendar();
+    });
+
+    document.getElementById('sync-day').addEventListener('click', async () => {
+      const day = toApi(selectedDate || startInput.value);
+      if (!day) return;
+      const url = new URL('/admin/sync', window.location.origin);
+      if (token) url.searchParams.set('token', token);
+      url.searchParams.set('date', day);
+      await fetch(url);
+      await loadRanges();
+      await loadMonthCalendar();
+    });
+
+    document.getElementById('month').addEventListener('change', loadMonthCalendar);
+
+    loadRanges().then(loadMonthCalendar);
+  </script>
+</body>
+</html>
