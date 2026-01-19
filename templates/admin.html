@@ -293,6 +293,7 @@
         <button class="btn" id="refresh">Показать</button>
         <button class="btn" id="sync">Синхронизировать пропуски</button>
         <button class="btn" id="sync-day">Синхронизировать день</button>
+        <button class="btn" id="sync-ck">Синхронизировать ЦК</button>
       </div>
       <div class="grid">
         <div>
@@ -464,6 +465,14 @@
       const url = new URL('/admin/sync', window.location.origin);
       if (token) url.searchParams.set('token', token);
       url.searchParams.set('date', day);
+      await fetch(url);
+      await loadRanges();
+      await loadMonthCalendar();
+    });
+
+    document.getElementById('sync-ck').addEventListener('click', async () => {
+      const url = new URL('/admin/ck/sync', window.location.origin);
+      if (token) url.searchParams.set('token', token);
       await fetch(url);
       await loadRanges();
       await loadMonthCalendar();

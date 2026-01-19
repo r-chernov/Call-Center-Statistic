@@ -10,11 +10,10 @@ import re
 import time
 import sqlite3
 import io
+import csv
 from openpyxl import Workbook
-from amo import amo_bp
 
 app = Flask(__name__)
-app.register_blueprint(amo_bp)
 
 def load_env():
     env_path = os.path.join(app.root_path, ".env")
@@ -45,6 +44,9 @@ API_TOKEN        = "cc7g45ybc7g5ync84umc9gmu5c9g4mucc"
 HEADERS          = {"Authorization": API_TOKEN, "Accept": "application/json"}
 REQUEST_TIMEOUT  = 60  # таймаут в секундах
 PAGE_SIZE        = 500  # размер страницы
+
+# === Google Sheets (ЦК) ===
+CK_SHEET_CSV_URL = os.getenv("CK_SHEET_CSV_URL", "")
 
 # === База данных ===
 DB_PATH = os.getenv("CALLCENTER_DB_PATH", os.path.join(app.root_path, "data", "callcenter.db"))
@@ -105,6 +107,165 @@ def format_hms(seconds):
     s = total % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
+def normalize_name(value):
+    if not value:
+        return ""
+    return " ".join(value.replace("ё", "е").replace("Ё", "Е").lower().split())
+
+def parse_sheet_date(value):
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%d.%m.%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+def build_operator_name_map(operators_map):
+    out = {}
+    for oid, name in (operators_map or {}).items():
+        out[normalize_name(short_name(name))] = oid
+        out[normalize_name(name)] = oid
+    return out
+
+def ck_counts_from_sheet(date_str, operators_map):
+    if not CK_SHEET_CSV_URL:
+        print("CK sheet disabled: CK_SHEET_CSV_URL is empty")
+        return None
+    sheet = fetch_ck_sheet()
+    if not sheet:
+        return None
+    target_date = parse_date(date_str)
+    name_map = build_operator_name_map(operators_map)
+    counts = Counter()
+    unknown_names = set()
+    for row_date, operator_name, is_ck in sheet["rows"]:
+        if row_date != target_date or not is_ck:
+            continue
+        key = normalize_name(operator_name)
+        oid = name_map.get(key)
+        if not oid:
+            unknown_names.add(operator_name)
+            continue
+        counts[oid] += 1
+
+    if unknown_names:
+        print(f"CK sheet: unknown operators: {', '.join(sorted(unknown_names))}")
+    print(f"CK sheet {date_str}: rows={sum(counts.values())}")
+    return counts
+
+def fetch_ck_sheet():
+    if not CK_SHEET_CSV_URL:
+        print("CK sheet disabled: CK_SHEET_CSV_URL is empty")
+        return None
+    try:
+        r = requests.get(CK_SHEET_CSV_URL, timeout=REQUEST_TIMEOUT)
+    except requests.RequestException as e:
+        print(f"CK sheet error: {str(e)}")
+        return None
+    if r.status_code != 200:
+        print(f"CK sheet error: HTTP {r.status_code}")
+        return None
+
+    text = r.content.decode("utf-8-sig", errors="replace")
+    reader = csv.reader(io.StringIO(text))
+    headers = next(reader, None)
+    if not headers:
+        print("CK sheet error: empty header row")
+        return None
+
+    headers = [h.lstrip("\ufeff").strip() for h in headers]
+    normalized = [normalize_name(h).replace(" ", "") for h in headers]
+
+    def find_idx(options):
+        for opt in options:
+            key = normalize_name(opt).replace(" ", "")
+            if key in normalized:
+                return normalized.index(key)
+        return None
+
+    date_idx = find_idx(["Дата"])
+    operator_idx = find_idx(["Передал", "Передала", "Передающий"])
+    ck_idx = find_idx(["ЦК/Не ЦК", "ЦК/НЕЦК", "ЦК/НеЦК", "ЦК/НЕ ЦК"])
+
+    if date_idx is None or operator_idx is None or ck_idx is None:
+        print("CK sheet error: missing required headers")
+        print(f"CK sheet headers: {headers}")
+        return None
+
+    rows = []
+    for row in reader:
+        if len(row) <= max(date_idx, operator_idx, ck_idx):
+            continue
+        row_date = parse_sheet_date(row[date_idx])
+        if not row_date:
+            continue
+        ck_value = normalize_name(row[ck_idx]).replace(" ", "")
+        is_ck = ck_value == "цк"
+        operator_name = row[operator_idx].strip()
+        if not operator_name:
+            continue
+        rows.append((row_date, operator_name, is_ck))
+
+    return {"rows": rows}
+
+def sync_ck_sheet_all():
+    fetch_operators()
+    sheet = fetch_ck_sheet()
+    if not sheet:
+        return {"status": "skipped"}
+
+    name_map = build_operator_name_map(OPERATORS)
+    grouped = {}
+    unknown_names = set()
+    for row_date, operator_name, is_ck in sheet["rows"]:
+        if not is_ck:
+            continue
+        key = normalize_name(operator_name)
+        oid = name_map.get(key)
+        if not oid:
+            unknown_names.add(operator_name)
+            continue
+        date_str = format_date(row_date)
+        grouped.setdefault(date_str, Counter())
+        grouped[date_str][oid] += 1
+
+    if unknown_names:
+        print(f"CK sheet: unknown operators: {', '.join(sorted(unknown_names))}")
+
+    conn = db_connection()
+    try:
+        now = datetime.now(pytz.timezone("Europe/Samara")).strftime("%Y-%m-%d %H:%M:%S")
+        for date_str, counts in grouped.items():
+            conn.execute("UPDATE daily_operator_stats SET ck_lead_calls = 0 WHERE date = ?", (date_str,))
+            for oid, count in counts.items():
+                row = conn.execute(
+                    "SELECT 1 FROM daily_operator_stats WHERE date = ? AND operator_id = ?",
+                    (date_str, oid)
+                ).fetchone()
+                if row:
+                    conn.execute(
+                        "UPDATE daily_operator_stats SET ck_lead_calls = ?, updated_at = ? WHERE date = ? AND operator_id = ?",
+                        (count, now, date_str, oid)
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO daily_operator_stats
+                        (date, operator_id, operator_name, all_calls, total_calls, cs8_calls, cs20_calls, cs22_calls, lead_agent_calls, line_calls, ck_lead_calls, talk_sum, talk_count, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (date_str, oid, OPERATORS.get(oid, oid), 0, 0, 0, 0, 0, 0, 0, count, 0, 0, now)
+                    )
+        conn.commit()
+    finally:
+        conn.close()
+
+    print(f"CK sheet full sync: dates={len(grouped)}")
+    return {"status": "ok", "dates": len(grouped)}
+
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -159,6 +320,113 @@ def list_saved_dates():
         return [row["date"] for row in rows]
     finally:
         conn.close()
+
+def get_ck_lead_counts_from_db(date_str):
+    conn = db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT operator_id, ck_lead_calls FROM daily_operator_stats WHERE date = ?",
+            (date_str,)
+        ).fetchall()
+        return {row["operator_id"]: row["ck_lead_calls"] or 0 for row in rows}
+    finally:
+        conn.close()
+
+def update_ck_lead_from_sheet(date_str, operators_map):
+    counts = ck_counts_from_sheet(date_str, operators_map)
+    if counts is None:
+        return
+    conn = db_connection()
+    try:
+        now = datetime.now(pytz.timezone("Europe/Samara")).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute("UPDATE daily_operator_stats SET ck_lead_calls = 0 WHERE date = ?", (date_str,))
+        for oid, count in counts.items():
+            row = conn.execute(
+                "SELECT 1 FROM daily_operator_stats WHERE date = ? AND operator_id = ?",
+                (date_str, oid)
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE daily_operator_stats SET ck_lead_calls = ?, updated_at = ? WHERE date = ? AND operator_id = ?",
+                    (count, now, date_str, oid)
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO daily_operator_stats
+                    (date, operator_id, operator_name, all_calls, total_calls, cs8_calls, cs20_calls, cs22_calls, lead_agent_calls, line_calls, ck_lead_calls, talk_sum, talk_count, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (date_str, oid, operators_map.get(oid, oid), 0, 0, 0, 0, 0, 0, 0, count, 0, 0, now)
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+def has_date_in_db(date_str):
+    conn = db_connection()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM daily_operator_stats WHERE date = ? LIMIT 1",
+            (date_str,)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+def get_day_stats_from_db(date_str):
+    conn = db_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                operator_id,
+                operator_name,
+                all_calls,
+                total_calls,
+                cs8_calls,
+                cs20_calls,
+                lead_agent_calls,
+                line_calls,
+                ck_lead_calls,
+                talk_sum,
+                talk_count
+            FROM daily_operator_stats
+            WHERE date = ?
+            """,
+            (date_str,)
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return None
+
+    by_id = {row["operator_id"]: row for row in rows}
+    active_ids = {oid for oid, row in by_id.items() if (row["all_calls"] or 0) > 0}
+    operators = {oid: short_name(by_id[oid]["operator_name"] or oid) for oid in active_ids}
+
+    def avg_for(row):
+        talk_count = row["talk_count"] or 0
+        if talk_count <= 0:
+            return 0
+        return int((row["talk_sum"] or 0) / talk_count)
+
+    return {
+        "operators": operators,
+        "status": {oid: "" for oid in operators},
+        "all": {oid: by_id[oid]["all_calls"] or 0 for oid in operators},
+        "line": {oid: format_hms(by_id[oid]["line_calls"] or 0) for oid in operators},
+        "total": {oid: by_id[oid]["total_calls"] or 0 for oid in operators},
+        "cs8": {oid: by_id[oid]["cs8_calls"] or 0 for oid in operators},
+        "cs20": {oid: by_id[oid]["cs20_calls"] or 0 for oid in operators},
+        "lead_agent": {oid: by_id[oid]["lead_agent_calls"] or 0 for oid in operators},
+        "ck_lead": {oid: by_id[oid]["ck_lead_calls"] or 0 for oid in operators},
+        "avg": {oid: avg_for(by_id[oid]) for oid in operators},
+        "new": 0,
+        "new_noactive": 0,
+        "server_time": int(time.time() * 1000)
+    }
 
 def to_db_key(date_str):
     return parse_date(date_str).strftime("%Y%m%d")
@@ -384,7 +652,27 @@ def sync_day(date_str):
     operators_from_calls = extract_operators_from_calls(calls)
     operators_map = OPERATORS or operators_from_calls
     line_seconds = fetch_line_seconds(date_str, operators_map=operators_map)
+    ck_counts = ck_counts_from_sheet(date_str, operators_map)
     stats = aggregate_calls(calls, operators_map=operators_map)
+    if ck_counts is None:
+        ck_counts = {}
+    for oid, count in ck_counts.items():
+        if oid not in stats:
+            stats[oid] = {
+                "all": 0,
+                "total": 0,
+                "cs8": 0,
+                "cs20": 0,
+                "cs22": 0,
+                "lead_agent": 0,
+                "line": 0,
+                "ck_lead": count,
+                "talk_sum": 0,
+                "talk_count": 0,
+                "name": operators_map.get(oid, "")
+            }
+        else:
+            stats[oid]["ck_lead"] = count
     for oid, seconds in line_seconds.items():
         stats[oid]["line"] = seconds
         if not stats[oid].get("name"):
@@ -622,6 +910,8 @@ def init_scheduler():
         sched.add_job(fetch_active_campaigns, 'cron', hour=10, minute=0)
         # Автосинхронизация вчерашнего дня в 00:10
         sched.add_job(sync_yesterday, 'cron', hour=0, minute=10)
+        # Полный синк ЦК из Google Sheets раз в день в 00:30
+        sched.add_job(sync_ck_sheet_all, 'cron', hour=0, minute=30)
         sched.start()
 
 def render_dashboard():
@@ -657,7 +947,7 @@ def report_export():
     wb = Workbook()
     ws = wb.active
     ws.title = "Report"
-    ws.append(["Оператор", "Всего", "В линии", "Диалогов", "Перевод", "Согласие", "Лид Агент", "ЦК Лид", "Среднее, сек"])
+    ws.append(["Оператор", "Всего", "На линии", "Диалогов", "Перевод", "Согласие", "Лид Агент", "ЦК Лид", "Среднее, сек"])
     for row in data["rows"]:
         ws.append([
             row["operator_name"],
@@ -762,9 +1052,34 @@ def admin_sync():
         print(error_details)
         return jsonify({"error": str(e), "details": error_details}), 500
 
+@app.route('/admin/ck/sync')
+def admin_ck_sync():
+    if not require_admin():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        result = sync_ck_sheet_all()
+        return jsonify({"status": "ok", "result": result})
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Admin CK sync failed: {str(e)}")
+        print(error_details)
+        return jsonify({"error": str(e), "details": error_details}), 500
+
 @app.route('/stats')
 def stats():
     requested_date = request.args.get("date")
+    if requested_date:
+        if has_date_in_db(requested_date):
+            fetch_operators()
+            update_ck_lead_from_sheet(requested_date, OPERATORS)
+            cached = get_day_stats_from_db(requested_date)
+            if cached:
+                return jsonify(cached)
+        sync_day(requested_date)
+        cached = get_day_stats_from_db(requested_date)
+        if cached:
+            return jsonify(cached)
     fetch_operators()
     calls   = fetch_all_calls_details(requested_date=requested_date, operators_map=OPERATORS)
     operators_from_calls = extract_operators_from_calls(calls)
