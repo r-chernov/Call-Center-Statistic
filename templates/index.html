@@ -25,8 +25,8 @@
       margin:0;
       font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
       color: var(--white);
-      height: 100vh;
-      overflow: hidden;
+      min-height: 100vh;
+      overflow-y: auto;
       background: #0b0f0a;
     }
 
@@ -169,13 +169,12 @@
     .wrap{
       position:relative;
       z-index:2;
-      height: calc(100vh - 70px);
+      min-height: calc(100vh - 70px);
       display:flex;
       flex-direction:column;
       align-items:center;
       padding: 28px 14px 22px;
       gap: 18px;
-      overflow: auto;
     }
 
     .titleBlock{
@@ -252,6 +251,23 @@
       box-shadow: var(--shadow);
       backdrop-filter: blur(12px);
       overflow:hidden;
+    }
+
+    .tableScroll{
+      max-height: calc(100vh - 360px);
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .branchSwap{
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+
+    .branchSwap.is-switching{
+      opacity: 0.9;
+      transform: translateY(0);
     }
 
     .tableHead{
@@ -359,6 +375,9 @@
       table{
         font-size: 13px;
       }
+      .tableScroll{
+        max-height: calc(100vh - 420px);
+      }
     }
   </style>
 </head>
@@ -389,26 +408,16 @@
       </div>
     </div>
 
-    <div class="tableWrap">
+    <div class="tableWrap branchSwap" id="branch-swap">
       <div class="tableHead">
         <div class="left">Статистика операторов</div>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Оператор</th>
-            <th>Всего звонков</th>
-            <th>В линии</th>
-            <th>Диалогов</th>
-            <th>Перевод</th>
-            <th>Согласие</th>
-            <th>Лид Агент</th>
-            <th>ЦК Лид</th>
-            <th>Среднее, сек</th>
-          </tr>
-        </thead>
-        <tbody id="stats-body"></tbody>
-      </table>
+      <div class="tableScroll">
+        <table>
+          <thead id="stats-head"></thead>
+          <tbody id="stats-body"></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="indicator">
@@ -448,91 +457,171 @@
       return input.value || toInputDate(todayText);
     }
 
+    const branchConfigs = [
+      {
+        name: "УЛЬЯНОВСКИЙ ФИЛИАЛ",
+        operatorFilter: (id) => id !== "38",
+        columns: [
+          { key: "name", label: "Оператор" },
+          { key: "all", label: "Всего звонков" },
+          { key: "line", label: "В линии" },
+          { key: "total", label: "Диалогов" },
+          { key: "cs20", label: "Перевод" },
+          { key: "cs8", label: "Согласие" },
+          { key: "lead_agent", label: "Лид Агент" },
+          { key: "ck_lead", label: "ЦК Лид" },
+          { key: "avg", label: "Среднее, сек" }
+        ]
+      },
+      {
+        name: "МОСКОВСКИЙ ФИЛИАЛ",
+        operatorFilter: (id) => id === "38",
+        columns: [
+          { key: "name", label: "Оператор" },
+          { key: "calls_1m", label: "Кол-во звонков от минуты" },
+          { key: "cs8", label: "Согласия на встречу" },
+          { key: "meetings", label: "Встреч проведено" },
+          { key: "deals", label: "Кол-во успешных сделок" },
+          { key: "revenue", label: "Выручка" }
+        ]
+      }
+    ];
+    let activeBranchIndex = 0;
     let serverOffsetMs = 0;
+    let lastStatsData = null;
 
-    async function loadStats() {
-      const selected = getSelectedDate();
-      const apiDate = toApiDate(selected);
-      const url = apiDate ? `/stats?date=${encodeURIComponent(apiDate)}` : '/stats';
-      const res = await fetch(url);
-      const data = await res.json();
+    function renderStats(data) {
+      if (!data) return;
       const tbody = document.getElementById('stats-body');
+      const thead = document.getElementById('stats-head');
       tbody.innerHTML = '';
+      thead.innerHTML = '';
 
       if (typeof data.server_time === 'number') {
         serverOffsetMs = data.server_time - Date.now();
       }
 
-      const displayDate = formatDisplayDate(selected);
+      const displayDate = formatDisplayDate(getSelectedDate());
       document.getElementById('title-date').textContent = displayDate;
 
-      Object.entries(data.operators).forEach(([id, name]) => {
-        const all = data.all[id] || 0;
-        const line = data.line[id] || 0;
-        const total = data.total[id] || 0;
-        const cs20 = data.cs20[id] || 0;
-        const cs8 = data.cs8[id] || 0;
-        const leadAgent = data.lead_agent[id] || 0;
-        const ckLead = data.ck_lead[id] || 0;
-        const avg = data.avg[id] || 0;
-        if (all === 0 && line === 0 && total === 0 && cs20 === 0 && cs8 === 0 && leadAgent === 0 && ckLead === 0 && avg === 0) return;
+      const activeBranch = branchConfigs[activeBranchIndex];
+      const headerCells = activeBranch.columns.map(col => `<th>${col.label}</th>`).join('');
+      thead.innerHTML = `<tr>${headerCells}</tr>`;
 
-        tbody.insertAdjacentHTML('beforeend', `
-          <tr>
-            <td>${name}</td>
-            <td>${all}</td>
-            <td>${line}</td>
-            <td>${total}</td>
-            <td>${cs20}</td>
-            <td>${cs8}</td>
-            <td>${leadAgent}</td>
-            <td>${ckLead}</td>
-            <td>${avg}</td>
-          </tr>
-        `);
+      Object.entries(data.operators).forEach(([id, name]) => {
+        if (!activeBranch.operatorFilter(id)) return;
+        const row = {
+          name,
+          all: data.all[id] || 0,
+          line: data.line[id] || 0,
+          total: data.total[id] || 0,
+          cs20: data.cs20[id] || 0,
+          cs8: data.cs8[id] || 0,
+          lead_agent: data.lead_agent[id] || 0,
+          ck_lead: data.ck_lead[id] || 0,
+          avg: data.avg[id] || 0,
+          calls_1m: 0,
+          meetings: 0,
+          deals: 0,
+          revenue: 0
+        };
+        const cells = activeBranch.columns.map(col => `<td>${row[col.key] ?? ""}</td>`).join('');
+        tbody.insertAdjacentHTML('beforeend', `<tr>${cells}</tr>`);
       });
     }
 
-    document.getElementById('stats-date').value = toInputDate(todayText);
-    document.getElementById('stats-apply').addEventListener('click', loadStats);
-
-    function scheduleStatsRefresh() {
-      const serverNow = Date.now() + serverOffsetMs;
-      const msToNextMinute = 60000 - (serverNow % 60000);
-      setTimeout(() => {
-        loadStats();
-        setInterval(loadStats, 60000);
-      }, msToNextMinute);
+    async function fetchStats() {
+      const selected = getSelectedDate();
+      const apiDate = toApiDate(selected);
+      const url = apiDate ? `/stats?date=${encodeURIComponent(apiDate)}` : '/stats';
+      const res = await fetch(url);
+      return res.json();
     }
 
-    loadStats().then(scheduleStatsRefresh);
+    async function loadStats() {
+      const data = await fetchStats();
+      lastStatsData = data;
+      renderStats(lastStatsData);
+    }
 
-    const branches = ["УЛЬЯНОВСКИЙ ФИЛИАЛ", "МОСКОВСКИЙ ФИЛИАЛ"];
+    const defaultDate = (() => {
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    })();
+    document.getElementById('stats-date').value = toInputDate(todayText) || defaultDate;
+    document.getElementById('stats-apply').addEventListener('click', loadStats);
+
+    async function scheduleStatsRefresh() {
+      await loadStats();
+      setInterval(loadStats, 60000);
+    }
+
+    scheduleStatsRefresh();
+
+    const branches = branchConfigs.map(item => item.name);
     const branchEl = document.getElementById('branch-name');
+    const branchSwap = document.getElementById('branch-swap');
     const timerEl = document.getElementById('switch-timer');
     const ring = document.getElementById('ring-progress');
-    const cycleSeconds = 60;
+    const cycleSeconds = 15;
+    let secondsLeft = cycleSeconds;
+    let lastTickMs = Date.now();
+    let branchSwapInProgress = false;
     const radius = 82;
     const circumference = 2 * Math.PI * radius;
 
-    ring.style.strokeDasharray = `${circumference} ${circumference}`;
-    ring.style.strokeDashoffset = '0';
-
-    function updateBranchTicker() {
-      const serverNow = Date.now() + serverOffsetMs;
-      const seconds = Math.floor(serverNow / 1000) % 60;
-      const minutes = Math.floor(serverNow / 60000);
-      const secondsLeft = seconds === 0 ? 60 : 60 - seconds;
-      const progress = seconds / 60;
-      const branchIndex = minutes % branches.length;
-
-      branchEl.textContent = branches[branchIndex];
-      ring.style.strokeDashoffset = `${circumference * progress}`;
-      timerEl.textContent = `Смена филиала через ${secondsLeft} сек`;
+    if (ring) {
+      ring.style.strokeDasharray = `${circumference} ${circumference}`;
+      ring.style.strokeDashoffset = '0';
     }
 
-    updateBranchTicker();
-    setInterval(updateBranchTicker, 1000);
+    async function switchBranch(branchIndex) {
+      if (branchSwapInProgress) return;
+      branchSwapInProgress = true;
+      activeBranchIndex = branchIndex;
+      branchEl.textContent = branches[branchIndex];
+      if (branchSwap) {
+        branchSwap.classList.add('is-switching');
+      }
+      renderStats(lastStatsData);
+      if (branchSwap) {
+        branchSwap.classList.remove('is-switching');
+      }
+      branchSwapInProgress = false;
+    }
+
+    function updateTimerUI() {
+      const progress = (cycleSeconds - secondsLeft) / cycleSeconds;
+      if (branchEl) {
+        branchEl.textContent = branches[activeBranchIndex];
+      }
+      if (ring) {
+        ring.style.strokeDashoffset = `${circumference * progress}`;
+      }
+      if (timerEl) {
+        timerEl.textContent = `Смена филиала через ${secondsLeft} сек`;
+      }
+    }
+
+    function updateBranchTicker() {
+      const now = Date.now();
+      const elapsed = Math.floor((now - lastTickMs) / 1000);
+      if (elapsed <= 0) return;
+      lastTickMs += elapsed * 1000;
+      secondsLeft -= elapsed;
+      if (secondsLeft <= 0) {
+        const nextIndex = (activeBranchIndex + 1) % branches.length;
+        switchBranch(nextIndex);
+        secondsLeft = cycleSeconds;
+      }
+      updateTimerUI();
+    }
+
+    updateTimerUI();
+    setInterval(updateBranchTicker, 250);
 
     const topbar = document.getElementById('topbar');
     const topbarToggle = document.getElementById('topbar-toggle');

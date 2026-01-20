@@ -374,6 +374,17 @@ def has_date_in_db(date_str):
     finally:
         conn.close()
 
+def has_call_data_for_date(date_str):
+    conn = db_connection()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM daily_operator_stats WHERE date = ? AND all_calls > 0 LIMIT 1",
+            (date_str,)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
 def get_day_stats_from_db(date_str):
     conn = db_connection()
     try:
@@ -1070,7 +1081,8 @@ def admin_ck_sync():
 def stats():
     requested_date = request.args.get("date")
     if requested_date:
-        if has_date_in_db(requested_date):
+        today = datetime.now(pytz.timezone("Europe/Samara")).strftime("%d-%m-%Y")
+        if requested_date != today and has_date_in_db(requested_date) and has_call_data_for_date(requested_date):
             fetch_operators()
             update_ck_lead_from_sheet(requested_date, OPERATORS)
             cached = get_day_stats_from_db(requested_date)
