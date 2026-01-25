@@ -161,6 +161,17 @@
       font-weight: 600;
       outline: none;
     }
+    input[type="number"]{
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.28);
+      color: var(--white);
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-weight: 600;
+      outline: none;
+      width: 110px;
+    }
 
     .btn{
       border: 1px solid rgba(255,255,255,0.18);
@@ -285,6 +296,11 @@
   <main class="wrap">
     <section class="panel">
       <div class="title">Админ синхронизация</div>
+      <div class="row" style="margin-bottom: 12px;">
+        <label for="nightlyDays">Ночной пересинк, дней</label>
+        <input type="number" id="nightlyDays" min="0" step="1" placeholder="0 = все">
+        <button class="btn" id="nightlySave">Сохранить</button>
+      </div>
       <div class="row">
         <label for="start">Период</label>
         <input type="date" id="start">
@@ -293,7 +309,6 @@
         <button class="btn" id="refresh">Показать</button>
         <button class="btn" id="sync">Синхронизировать пропуски</button>
         <button class="btn" id="sync-day">Синхронизировать день</button>
-        <button class="btn" id="sync-ck">Синхронизировать ЦК</button>
       </div>
       <div class="grid">
         <div>
@@ -367,6 +382,17 @@
       }
 
       return data;
+    }
+
+    async function loadNightlySetting() {
+      const url = new URL('/admin/nightly', window.location.origin);
+      if (token) url.searchParams.set('token', token);
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (typeof data.days !== 'undefined') {
+        document.getElementById('nightlyDays').value = data.days;
+      }
     }
 
     function daysInMonth(year, month) {
@@ -470,17 +496,20 @@
       await loadMonthCalendar();
     });
 
-    document.getElementById('sync-ck').addEventListener('click', async () => {
-      const url = new URL('/admin/ck/sync', window.location.origin);
+
+    document.getElementById('nightlySave').addEventListener('click', async () => {
+      const days = document.getElementById('nightlyDays').value;
+      const url = new URL('/admin/nightly', window.location.origin);
       if (token) url.searchParams.set('token', token);
+      url.searchParams.set('days', days === "" ? "0" : days);
       await fetch(url);
-      await loadRanges();
-      await loadMonthCalendar();
+      await loadNightlySetting();
     });
 
     document.getElementById('month').addEventListener('change', loadMonthCalendar);
 
     loadRanges().then(loadMonthCalendar);
+    loadNightlySetting();
   </script>
 </body>
 </html>

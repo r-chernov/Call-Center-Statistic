@@ -334,6 +334,7 @@
       display: inline-block;
       width: 180px;
       height: 180px;
+      cursor: pointer;
     }
 
     .logoRing{
@@ -460,6 +461,7 @@
     const branchConfigs = [
       {
         name: "УЛЬЯНОВСКИЙ ФИЛИАЛ",
+        source: "callcenter",
         operatorFilter: (id) => id !== "38",
         columns: [
           { key: "name", label: "Оператор" },
@@ -470,12 +472,14 @@
           { key: "cs8", label: "Согласие" },
           { key: "lead_agent", label: "Лид Агент" },
           { key: "ck_lead", label: "ЦК Лид" },
+          { key: "sum_stats", label: "Общая" },
           { key: "avg", label: "Среднее, сек" }
         ]
       },
       {
         name: "МОСКОВСКИЙ ФИЛИАЛ",
-        operatorFilter: (id) => id === "38",
+        source: "amo",
+        operatorFilter: null,
         columns: [
           { key: "name", label: "Оператор" },
           { key: "calls_1m", label: "Кол-во звонков от минуты" },
@@ -499,6 +503,16 @@
 
       if (typeof data.server_time === 'number') {
         serverOffsetMs = data.server_time - Date.now();
+        if (!manualSwitch) {
+          const serverSeconds = Math.floor(data.server_time / 1000);
+          const cycleIndex = Math.floor(serverSeconds / cycleSeconds) % branches.length;
+          activeBranchIndex = cycleIndex;
+          const secondsInto = serverSeconds % cycleSeconds;
+          secondsLeft = cycleSeconds - secondsInto;
+          if (secondsLeft === 0) secondsLeft = cycleSeconds;
+          lastTickMs = Date.now();
+          updateTimerUI();
+        }
       }
 
       const displayDate = formatDisplayDate(getSelectedDate());
@@ -508,9 +522,14 @@
       const headerCells = activeBranch.columns.map(col => `<th>${col.label}</th>`).join('');
       thead.innerHTML = `<tr>${headerCells}</tr>`;
 
-      Object.entries(data.operators).forEach(([id, name]) => {
-        if (!activeBranch.operatorFilter(id)) return;
-        const row = {
+      const operatorSource = activeBranch.source === "amo"
+        ? (data.amo_operators || {})
+        : (data.operators || {});
+
+      const rows = [];
+      Object.entries(operatorSource).forEach(([id, name]) => {
+        if (activeBranch.operatorFilter && !activeBranch.operatorFilter(id)) return;
+        rows.push({
           name,
           all: data.all[id] || 0,
           line: data.line[id] || 0,
@@ -520,11 +539,33 @@
           lead_agent: data.lead_agent[id] || 0,
           ck_lead: data.ck_lead[id] || 0,
           avg: data.avg[id] || 0,
-          calls_1m: 0,
-          meetings: 0,
-          deals: 0,
-          revenue: 0
-        };
+          sum_stats: (data.cs20[id] || 0) + (data.cs8[id] || 0) + (data.lead_agent[id] || 0) + (data.ck_lead[id] || 0),
+          calls_1m: (data.amo_calls_1m && data.amo_calls_1m[id]) ? data.amo_calls_1m[id] : 0,
+          meetings: (data.amo_meetings && data.amo_meetings[id]) ? data.amo_meetings[id] : 0,
+          deals: (data.amo_deals && data.amo_deals[id]) ? data.amo_deals[id] : 0,
+          revenue: (data.amo_revenue && data.amo_revenue[id]) ? data.amo_revenue[id] : 0
+        });
+      });
+
+      let renderRows = rows;
+      if (activeBranch.source === "amo") {
+        const merged = {};
+        rows.forEach(row => {
+          const key = row.name || "Без имени";
+          if (!merged[key]) {
+            merged[key] = { ...row };
+            return;
+          }
+          merged[key].calls_1m += row.calls_1m;
+          merged[key].cs8 += row.cs8;
+          merged[key].meetings += row.meetings;
+          merged[key].deals += row.deals;
+          merged[key].revenue += row.revenue;
+        });
+        renderRows = Object.values(merged);
+      }
+
+      renderRows.forEach(row => {
         const cells = activeBranch.columns.map(col => `<td>${row[col.key] ?? ""}</td>`).join('');
         tbody.insertAdjacentHTML('beforeend', `<tr>${cells}</tr>`);
       });
@@ -566,10 +607,12 @@
     const branchSwap = document.getElementById('branch-swap');
     const timerEl = document.getElementById('switch-timer');
     const ring = document.getElementById('ring-progress');
+    const logoWrap = document.querySelector('.logoWrap');
     const cycleSeconds = 60;
     let secondsLeft = cycleSeconds;
     let lastTickMs = Date.now();
     let branchSwapInProgress = false;
+    let manualSwitch = false;
     const radius = 82;
     const circumference = 2 * Math.PI * radius;
 
@@ -594,6 +637,15 @@
     }
 
     function updateTimerUI() {
+      if (manualSwitch) {
+        if (timerEl) {
+          timerEl.textContent = 'Ручной режим';
+        }
+        if (ring) {
+          ring.style.strokeDashoffset = '0';
+        }
+        return;
+      }
       const progress = (cycleSeconds - secondsLeft) / cycleSeconds;
       if (branchEl) {
         branchEl.textContent = branches[activeBranchIndex];
@@ -607,6 +659,7 @@
     }
 
     function updateBranchTicker() {
+      if (manualSwitch) return;
       const now = Date.now();
       const elapsed = Math.floor((now - lastTickMs) / 1000);
       if (elapsed <= 0) return;
@@ -622,6 +675,17 @@
 
     updateTimerUI();
     setInterval(updateBranchTicker, 250);
+
+    if (logoWrap) {
+      logoWrap.addEventListener('click', () => {
+        if (!manualSwitch) {
+          manualSwitch = true;
+        }
+        const nextIndex = (activeBranchIndex + 1) % branches.length;
+        switchBranch(nextIndex);
+        updateTimerUI();
+      });
+    }
 
     const topbar = document.getElementById('topbar');
     const topbarToggle = document.getElementById('topbar-toggle');

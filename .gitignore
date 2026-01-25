@@ -1,6 +1,8 @@
 # виртуальное окружение
 venv/
 .env
+tokens.json
+data/callcenter.db
 
 # кеш Python
 __pycache__/

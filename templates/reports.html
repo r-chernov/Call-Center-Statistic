@@ -25,8 +25,8 @@
       margin:0;
       font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
       color: var(--white);
-      height: 100vh;
-      overflow: hidden;
+      min-height: 100vh;
+      overflow-y: auto;
       background: #0b0f0a;
     }
 
@@ -147,7 +147,7 @@
     .wrap{
       position:relative;
       z-index:2;
-      height: calc(100vh - 70px);
+      min-height: calc(100vh - 70px);
       display:flex;
       flex-direction:column;
       align-items:center;
@@ -272,6 +272,12 @@
       overflow:hidden;
     }
 
+    .tableScroll{
+      max-height: calc(100vh - 360px);
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
     .tableHead{
       display:flex;
       align-items:center;
@@ -357,13 +363,33 @@
       font-size: 12px;
     }
 
+    .kpiBlock{
+      width: min(1280px, 96vw);
+      display:flex;
+      flex-direction:column;
+      gap: 6px;
+    }
+
+    .kpiBlockLabel{
+      display:none;
+    }
+
     .kpiRow{
       display:flex;
       gap: 10px;
       flex-wrap:wrap;
       justify-content:center;
-      width: min(1020px, 96vw);
+      width: min(1280px, 96vw);
       margin-top: 6px;
+    }
+
+    @media (min-width: 1024px){
+      .kpiRow{
+        flex-wrap: nowrap;
+      }
+      .kpi{
+        min-width: 150px;
+      }
     }
 
     .kpi{
@@ -434,9 +460,9 @@
       <div class="chip">
         <div class="chipLabel">Филиал</div>
         <select id="branch">
-          <option>Ульяновск</option>
-          <option>Москва</option>
-          <option selected>Общие показатели</option>
+          <option value="ulyanovsk">Ульяновск</option>
+          <option value="moscow">Москва</option>
+          <option value="all" selected>Общие показатели</option>
         </select>
       </div>
 
@@ -450,30 +476,75 @@
     </div>
 
     <!-- KPI -->
-    <section class="kpiRow">
+    <div class="kpiBlock" id="kpi-uly-block">
+      <div class="kpiBlockLabel">УЛЬСК</div>
+    <section class="kpiRow" id="kpi-uly">
       <div class="kpi">
-        <div class="kTitle">Всего звонков</div>
+        <div class="kTitle">Всего</div>
         <div class="kVal" id="kTotal">—</div>
       </div>
       <div class="kpi">
-        <div class="kTitle">Дозвон %</div>
-        <div class="kVal" id="kReach">—</div>
+        <div class="kTitle">На линии</div>
+        <div class="kVal" id="kLine">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kTitle">Диалогов</div>
+        <div class="kVal" id="kDialogs">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kTitle">Перевод</div>
+        <div class="kVal" id="kTransfer">—</div>
       </div>
       <div class="kpi">
         <div class="kTitle">Согласие</div>
         <div class="kVal" id="kAgree">—</div>
       </div>
       <div class="kpi">
+        <div class="kTitle">Лид Агент</div>
+        <div class="kVal" id="kLeadAgent">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kTitle">ЦК Лид</div>
+        <div class="kVal" id="kCkLead">—</div>
+      </div>
+      <div class="kpi">
         <div class="kTitle">Среднее, сек</div>
         <div class="kVal" id="kAvg">—</div>
       </div>
     </section>
+    </div>
+
+    <div class="kpiBlock" id="kpi-msk-block" style="display:none;">
+      <div class="kpiBlockLabel">МСК</div>
+      <section class="kpiRow" id="kpi-msk">
+        <div class="kpi">
+          <div class="kTitle">Звонков от минуты</div>
+          <div class="kVal" id="mCalls1m">—</div>
+        </div>
+        <div class="kpi">
+          <div class="kTitle">Согласия</div>
+          <div class="kVal" id="mAgree">—</div>
+        </div>
+        <div class="kpi">
+          <div class="kTitle">Встреч проведено</div>
+          <div class="kVal" id="mMeetings">—</div>
+        </div>
+        <div class="kpi">
+          <div class="kTitle">Успешные сделки</div>
+          <div class="kVal" id="mDeals">—</div>
+        </div>
+        <div class="kpi">
+          <div class="kTitle">Выручка</div>
+          <div class="kVal" id="mRevenue">—</div>
+        </div>
+      </section>
+    </div>
 
     <!-- Таблица отчёта -->
-    <section class="tableWrap">
+    <section class="tableWrap" id="table-uly">
       <div class="tableHead">
         <div class="left">
-          <span>Отчёт по операторам</span>
+          <span>Отчёт по Ульяновскому филиалу</span>
           <span class="badge" id="periodBadge">Период не выбран</span>
         </div>
         <div class="right">
@@ -481,26 +552,56 @@
         </div>
       </div>
 
-      <table>
-        <thead>
-          <tr>
-            <th>Оператор</th>
-            <th>Всего</th>
-            <th>На линии</th>
-            <th>Диалогов</th>
-            <th>Перевод</th>
-            <th>Согласие</th>
-            <th>Лид Агент</th>
-            <th>ЦК Лид</th>
-            <th>Среднее, сек</th>
-          </tr>
-        </thead>
-        <tbody id="tbody">
-          <tr>
-            <td class="muted" colspan="9">Нет данных</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="tableScroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Оператор</th>
+              <th>Всего</th>
+              <th>На линии</th>
+              <th>Диалогов</th>
+              <th>Перевод</th>
+              <th>Согласие</th>
+              <th>Лид Агент</th>
+              <th>ЦК Лид</th>
+              <th>Среднее, сек</th>
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <tr>
+              <td class="muted" colspan="9">Нет данных</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="tableWrap" id="table-msk" style="display:none;">
+      <div class="tableHead">
+        <div class="left">
+          <span>Отчёт по Московскому филиалу</span>
+          <span class="badge" id="periodBadgeMsk">Период не выбран</span>
+        </div>
+      </div>
+      <div class="tableScroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Оператор</th>
+              <th>Звонков от минуты</th>
+              <th>Согласия</th>
+              <th>Встреч проведено</th>
+              <th>Успешные сделки</th>
+              <th>Выручка</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-moscow">
+            <tr>
+              <td class="muted" colspan="6">Нет данных</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
   </main>
@@ -537,7 +638,7 @@
       badge.textContent = `${fmt(new Date(startIso))} - ${fmt(new Date(endIso))}`;
     }
 
-    function renderTable(rows){
+    function renderUlyTable(rows){
       const tbody = document.getElementById("tbody");
       if (!rows.length) {
         tbody.innerHTML = '<tr><td class=\"muted\" colspan=\"9\">Нет данных</td></tr>';
@@ -565,14 +666,44 @@
       `).join("");
     }
 
-    function renderTotals(t){
+    function renderUlyTotals(t){
       document.getElementById("kTotal").textContent = t.all ?? "—";
-      document.getElementById("kReach").textContent = (t.reach ?? "—") + (t.reach !== undefined ? "%" : "");
+      document.getElementById("kLine").textContent = t.line ?? "—";
+      document.getElementById("kDialogs").textContent = t.total ?? "—";
+      document.getElementById("kTransfer").textContent = t.cs20 ?? "—";
       document.getElementById("kAgree").textContent = t.cs8 ?? "—";
+      document.getElementById("kLeadAgent").textContent = t.lead_agent ?? "—";
+      document.getElementById("kCkLead").textContent = t.ck_lead ?? "—";
       document.getElementById("kAvg").textContent = t.avg ?? "—";
     }
 
-    function updateExportLink(startIso, endIso){
+    function renderMoscowTable(rows){
+      const tbody = document.getElementById("tbody-moscow");
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td class="muted" colspan="6">Нет данных</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map(r => `
+        <tr>
+          <td><strong>${r.operator_name}</strong></td>
+          <td>${r.calls_1m ?? 0}</td>
+          <td>${r.agreements ?? 0}</td>
+          <td>${r.meetings ?? 0}</td>
+          <td>${r.deals ?? 0}</td>
+          <td>${r.revenue ?? 0}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderMoscowTotals(t){
+      document.getElementById("mCalls1m").textContent = t.calls_1m ?? "—";
+      document.getElementById("mAgree").textContent = t.agreements ?? "—";
+      document.getElementById("mMeetings").textContent = t.meetings ?? "—";
+      document.getElementById("mDeals").textContent = t.deals ?? "—";
+      document.getElementById("mRevenue").textContent = t.revenue ?? "—";
+    }
+
+    function updateExportLink(startIso, endIso, branch){
       const link = document.getElementById("exportXlsx");
       const url = new URL("/report/export", window.location.origin);
       url.searchParams.set("format", "xlsx");
@@ -580,30 +711,71 @@
         url.searchParams.set("start", toApi(startIso));
         url.searchParams.set("end", toApi(endIso));
       }
+      if (branch) {
+        url.searchParams.set("branch", branch);
+      }
       link.href = url.toString();
     }
 
     async function fetchReport(startIso, endIso){
       const url = new URL("/report/data", window.location.origin);
+      const branch = document.getElementById("branch").value;
       if (startIso && endIso) {
         url.searchParams.set("start", toApi(startIso));
         url.searchParams.set("end", toApi(endIso));
       }
+      if (branch) {
+        url.searchParams.set("branch", branch);
+      }
       const res = await fetch(url);
       const data = await res.json();
+      const branchValue = branch || "all";
+      const tableUly = document.getElementById("table-uly");
+      const tableMsk = document.getElementById("table-msk");
+      const kpiUly = document.getElementById("kpi-uly-block");
+      const kpiMsk = document.getElementById("kpi-msk-block");
       if (data.range) {
         const start = toIso(data.range.start);
         const end = toIso(data.range.end);
         dateFrom.value = start;
         dateTo.value = end;
         setBadge(start, end);
-        updateExportLink(start, end);
+        const badgeMsk = document.getElementById("periodBadgeMsk");
+        if (badgeMsk) {
+          badgeMsk.textContent = document.getElementById("periodBadge").textContent;
+        }
+        updateExportLink(start, end, branchValue);
       } else {
         setBadge("", "");
-        updateExportLink("", "");
+        updateExportLink("", "", branchValue);
       }
-      renderTable(data.rows || []);
-      renderTotals(data.totals || {});
+
+      if (branchValue === "moscow") {
+        tableUly.style.display = "none";
+        kpiUly.style.display = "none";
+        tableMsk.style.display = "";
+        kpiMsk.style.display = "";
+        renderMoscowTable(data.rows || []);
+        renderMoscowTotals(data.totals || {});
+      } else if (branchValue === "ulyanovsk") {
+        tableUly.style.display = "";
+        kpiUly.style.display = "";
+        tableMsk.style.display = "none";
+        kpiMsk.style.display = "none";
+        renderUlyTable(data.rows || []);
+        renderUlyTotals(data.totals || {});
+      } else {
+        tableUly.style.display = "";
+        kpiUly.style.display = "";
+        tableMsk.style.display = "";
+        kpiMsk.style.display = "";
+        const uly = data.ulyanovsk || {};
+        const msk = data.moscow || {};
+        renderUlyTable(uly.rows || []);
+        renderUlyTotals(uly.totals || {});
+        renderMoscowTable(msk.rows || []);
+        renderMoscowTotals(msk.totals || {});
+      }
     }
 
     document.querySelectorAll(".quickBtn").forEach(btn=>{
@@ -638,6 +810,10 @@
       fetchReport(dateFrom.value, dateTo.value);
     });
 
+    document.getElementById("branch").addEventListener("change", ()=>{
+      fetchReport(dateFrom.value, dateTo.value);
+    });
+
     fetchReport();
 
     document.querySelectorAll('a[href]').forEach((link) => {
@@ -654,3 +830,17 @@
   </script>
 </body>
 </html>
+    .kpiBlock{
+      width: min(1280px, 96vw);
+      display:flex;
+      flex-direction:column;
+      gap: 8px;
+    }
+
+    .kpiBlockLabel{
+      font-weight: 800;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      opacity: 0.85;
+      padding-left: 6px;
+    }
