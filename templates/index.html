@@ -535,7 +535,9 @@
           line: data.line[id] || 0,
           total: data.total[id] || 0,
           cs20: data.cs20[id] || 0,
-          cs8: data.cs8[id] || 0,
+          cs8: (activeBranch.source === "amo" && data.amo_agreements)
+            ? (data.amo_agreements[id] || 0)
+            : (data.cs8[id] || 0),
           lead_agent: data.lead_agent[id] || 0,
           ck_lead: data.ck_lead[id] || 0,
           avg: data.avg[id] || 0,

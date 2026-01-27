@@ -64,8 +64,11 @@ AMO_STATUS_MEETING_OK = str(os.getenv("AMO_STATUS_MEETING_OK", "79652190"))
 AMO_STATUS_DEAL_SUCCESS = str(os.getenv("AMO_STATUS_DEAL_SUCCESS", "142"))
 AMO_FIELD_MEETING_OK = str(os.getenv("AMO_FIELD_MEETING_OK", "964369"))
 AMO_FIELD_DEAL_SUM = str(os.getenv("AMO_FIELD_DEAL_SUM", "956237"))
+AMO_DEBUG_EVENTS = os.getenv("AMO_DEBUG_EVENTS", "").lower() in ("1", "true", "yes", "y")
 
 MOSCOW_OPERATOR_IDS = {oid.strip() for oid in (os.getenv("MOSCOW_OPERATOR_IDS", "38").split(",")) if oid.strip()}
+MOSCOW_SIPSPEAK_AGREEMENTS_IDS = {oid.strip() for oid in (os.getenv("MOSCOW_SIPSPEAK_AGREEMENTS_IDS", "38").split(",")) if oid.strip()}
+EXCLUDED_OPERATOR_IDS = {oid.strip() for oid in (os.getenv("EXCLUDED_OPERATOR_IDS", "38").split(",")) if oid.strip()}
 AMO_CALL_MIN_SECONDS = int(os.getenv("AMO_CALL_MIN_SECONDS", "60"))
 NIGHTLY_SYNC_TIME = os.getenv("CALLCENTER_NIGHTLY_SYNC_TIME", "02:30")
 NIGHTLY_SYNC_DAYS = int(os.getenv("CALLCENTER_NIGHTLY_SYNC_DAYS", "0") or 0)
@@ -197,6 +200,8 @@ def amo_fetch_users():
         return AMO_USERS_CACHE["data"]
     users = {}
     page = 1
+    debug_seen = 0
+    debug_seen = 0
     while True:
         try:
             r = amo_get("/api/v4/users", params={"limit": 250, "page": page})
@@ -287,17 +292,22 @@ def amo_events_call_notes(date_str):
     page = 1
     total = 0
     while True:
-        params = {
-            "limit": 250,
-            "page": page,
-            "filter[type]": ["incoming_call", "outgoing_call"],
-            "filter[created_at][from]": start_ts,
-            "filter[created_at][to]": end_ts
-        }
+        params = [
+            ("limit", 250),
+            ("page", page),
+            ("filter[type][]", "incoming_call"),
+            ("filter[type][]", "outgoing_call"),
+            ("filter[created_at][from]", start_ts),
+            ("filter[created_at][to]", end_ts),
+        ]
         try:
             r = amo_get("/api/v4/events", params=params)
         except requests.RequestException as e:
             print(f"AMO events request error: {e}")
+            break
+        if r.status_code == 204:
+            break
+        if r.status_code == 204:
             break
         if r.status_code != 200:
             print(f"AMO events HTTP {r.status_code}: {r.text}")
@@ -393,13 +403,14 @@ def amo_events_call_notes_range(start_date, end_date):
     page = 1
     total = 0
     while True:
-        params = {
-            "limit": 250,
-            "page": page,
-            "filter[type]": ["incoming_call", "outgoing_call"],
-            "filter[created_at][from]": start_ts,
-            "filter[created_at][to]": end_ts
-        }
+        params = [
+            ("limit", 250),
+            ("page", page),
+            ("filter[type][]", "incoming_call"),
+            ("filter[type][]", "outgoing_call"),
+            ("filter[created_at][from]", start_ts),
+            ("filter[created_at][to]", end_ts),
+        ]
         try:
             r = amo_get("/api/v4/events", params=params)
         except requests.RequestException as e:
@@ -521,6 +532,280 @@ def amo_leads_created_metrics(date_str):
         "revenue": revenue
     }
 
+def amo_leads_event_metrics(date_str):
+    if not amo_enabled():
+        return {
+            "agreement": Counter(),
+            "meeting": Counter(),
+            "success": Counter(),
+            "revenue": defaultdict(int)
+        }
+    start_ts, end_ts = amo_day_range(date_str)
+    agreement_latest = {}
+    status_latest = {}
+    meeting_leads = set()
+    success_leads = set()
+    created_by_map = {}
+    page = 1
+    total = 0
+    debug_seen = 0
+    debug_seen = 0
+
+    def extract_field_change(event):
+        value_after = event.get("value_after")
+        value_before = event.get("value_before")
+
+        if isinstance(value_after, list) and len(value_after) == 0 and value_before:
+            items = value_before if isinstance(value_before, list) else [value_before]
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if isinstance(item.get("custom_field_value"), dict):
+                    cf = item["custom_field_value"]
+                    field_id = cf.get("field_id") or cf.get("id")
+                    if field_id is not None:
+                        return str(field_id), []
+                field_id = item.get("field_id") or item.get("id") or item.get("custom_field_id")
+                if field_id is not None:
+                    return str(field_id), []
+        def extract_from_items(items, fallback_empty=False):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if isinstance(item.get("custom_field_value"), dict):
+                    cf = item["custom_field_value"]
+                    field_id = cf.get("field_id") or cf.get("id")
+                    value = cf.get("value")
+                    if value is None:
+                        value = cf.get("text")
+                    if value is None:
+                        value = cf.get("enum_id")
+                    values = [value] if value is not None else ([] if fallback_empty else None)
+                    return (str(field_id) if field_id is not None else ""), values
+                field_id = item.get("field_id") or item.get("id") or item.get("custom_field_id")
+                if field_id is None:
+                    field = item.get("field") or item.get("custom_field")
+                    if isinstance(field, dict):
+                        field_id = field.get("id") or field.get("field_id")
+                if field_id is None:
+                    field_id = event.get("field_id") or event.get("custom_field_id")
+                values = item.get("values")
+                if values is None and isinstance(item.get("value"), list):
+                    values = item.get("value")
+                if values is None and "value" in item:
+                    values = [item.get("value")]
+                return (str(field_id) if field_id is not None else ""), values
+            return "", None
+
+        items = []
+        if isinstance(value_after, list):
+            items = value_after
+        elif isinstance(value_after, dict):
+            items = [value_after]
+        field_id, values = extract_from_items(items)
+        if field_id:
+            return field_id, values
+
+        value_before = event.get("value_before")
+        items = []
+        if isinstance(value_before, list):
+            items = value_before
+        elif isinstance(value_before, dict):
+            items = [value_before]
+        field_id, values = extract_from_items(items, fallback_empty=True)
+        if field_id:
+            return field_id, values
+
+        field_id = event.get("field_id") or event.get("custom_field_id")
+        if field_id is not None:
+            return str(field_id), event.get("values") or event.get("value")
+        return "", None
+
+    def values_true(values):
+        if values is None:
+            return False
+        if not isinstance(values, list):
+            values = [values]
+        for v in values:
+            if isinstance(v, dict):
+                v = v.get("value")
+            if isinstance(v, str):
+                vv = v.strip().lower()
+                if vv in ("true", "1", "да", "yes", "y", "on", "вкл", "вкл."):
+                    return True
+                if vv in ("false", "0", "нет", "no", "n", "off", "выкл", "выкл."):
+                    return False
+            if v is True or v == 1:
+                return True
+        return False
+
+    def is_lead_event(event):
+        entity_type = event.get("entity_type")
+        if not entity_type:
+            entity_type = (event.get("_embedded", {}) or {}).get("entity", {}) or {}
+            entity_type = entity_type.get("type")
+        if isinstance(entity_type, str):
+            entity_type = entity_type.lower()
+        if entity_type and entity_type not in ("lead", "leads"):
+            return False
+        return True
+
+    def fetch_events(types, handler):
+        page = 1
+        while True:
+            params = [
+                ("limit", 250),
+                ("page", page),
+                ("filter[created_at][from]", start_ts),
+                ("filter[created_at][to]", end_ts),
+            ]
+            for t in types:
+                params.append(("filter[type][]", t))
+            try:
+                r = amo_get("/api/v4/events", params=params)
+            except requests.RequestException as e:
+                print(f"AMO events request error: {e}")
+                break
+            if r.status_code == 204:
+                break
+            if r.status_code != 200:
+                print(f"AMO events HTTP {r.status_code}: {r.text}")
+                break
+            data = r.json()
+            events = data.get("_embedded", {}).get("events", []) or []
+            if not events:
+                break
+            for event in events:
+                handler(event)
+            page += 1
+
+    def handle_status_event(event):
+        nonlocal total
+        if not is_lead_event(event):
+            return
+        lead_id = event.get("entity_id")
+        if not lead_id:
+            return
+        total += 1
+        event_ts = event.get("created_at") or 0
+        created_by = str(event.get("created_by") or "")
+        if created_by:
+            created_by_map[lead_id] = created_by
+        status_id = ""
+        value_after = event.get("value_after")
+        if isinstance(value_after, dict):
+            status_id = str(value_after.get("status_id") or "")
+            if not status_id and isinstance(value_after.get("lead_status"), dict):
+                status_id = str(value_after["lead_status"].get("id") or "")
+        elif isinstance(value_after, list):
+            for item in value_after:
+                if not isinstance(item, dict):
+                    continue
+                if "status_id" in item:
+                    status_id = str(item.get("status_id") or "")
+                    break
+                if isinstance(item.get("lead_status"), dict):
+                    status_id = str(item["lead_status"].get("id") or "")
+                    if status_id:
+                        break
+        if status_id:
+            prev = status_latest.get(lead_id)
+            if not prev or event_ts >= prev[0]:
+                status_latest[lead_id] = (event_ts, status_id)
+            if status_id == AMO_STATUS_MEETING_DONE:
+                meeting_leads.add(lead_id)
+            if status_id == AMO_STATUS_DEAL_SUCCESS:
+                success_leads.add(lead_id)
+
+    def handle_field_event(event):
+        nonlocal total, debug_seen
+        if not is_lead_event(event):
+            return
+        lead_id = event.get("entity_id")
+        if not lead_id:
+            return
+        total += 1
+        event_ts = event.get("created_at") or 0
+        created_by = str(event.get("created_by") or "")
+        if created_by:
+            created_by_map[lead_id] = created_by
+        field_id, values = extract_field_change(event)
+        if AMO_DEBUG_EVENTS and debug_seen < 20:
+            print(f"AMO field change lead={lead_id} field_id={field_id} values={values}")
+            debug_seen += 1
+        if field_id == AMO_FIELD_MEETING_OK:
+            flag = values_true(values)
+            if AMO_DEBUG_EVENTS:
+                print(f"AMO meeting_ok lead={lead_id} at={event_ts} values={values} flag={flag}")
+            prev = agreement_latest.get(lead_id)
+            if not prev or event_ts >= prev[0]:
+                agreement_latest[lead_id] = (event_ts, flag)
+
+    fetch_events(["lead_status_changed"], handle_status_event)
+    fetch_events(["custom_field_value_changed", f"custom_field_{AMO_FIELD_MEETING_OK}_value_changed"], handle_field_event)
+
+    lead_ids = set(agreement_latest.keys()) | set(status_latest.keys()) | set(meeting_leads) | set(success_leads)
+    lead_ids = list(lead_ids)
+
+    lead_map = {}
+    lead_amounts = {}
+    chunk_size = 250
+    for i in range(0, len(lead_ids), chunk_size):
+        chunk = lead_ids[i:i+chunk_size]
+        params = [("limit", 250)]
+        for lid in chunk:
+            params.append(("filter[id][]", str(lid)))
+        try:
+            r = amo_get("/api/v4/leads", params=params)
+        except requests.RequestException as e:
+            print(f"AMO leads request error: {e}")
+            continue
+        if r.status_code == 204:
+            continue
+        if r.status_code != 200:
+            print(f"AMO leads HTTP {r.status_code}: {r.text}")
+            continue
+        data = r.json()
+        leads = data.get("_embedded", {}).get("leads", []) or []
+        for lead in leads:
+            lead_id = lead.get("id")
+            rid = str(lead.get("responsible_user_id") or "")
+            if lead_id and rid:
+                lead_map[lead_id] = rid
+                lead_amounts[lead_id] = amo_field_numeric(lead, AMO_FIELD_DEAL_SUM)
+
+    agreement = Counter()
+    meeting = Counter()
+    success = Counter()
+    revenue = defaultdict(int)
+
+    for lid, (ts, flag) in agreement_latest.items():
+        if not flag:
+            continue
+        rid = lead_map.get(lid) or created_by_map.get(lid)
+        if rid:
+            agreement[rid] += 1
+    # Count unique leads that reached the status during the day
+    for lid in meeting_leads:
+        rid = lead_map.get(lid) or created_by_map.get(lid)
+        if rid:
+            meeting[rid] += 1
+    for lid in success_leads:
+        rid = lead_map.get(lid) or created_by_map.get(lid)
+        if rid:
+            success[rid] += 1
+            amount = lead_amounts.get(lid, 0)
+            if amount:
+                revenue[rid] += amount
+
+    print(f"AMO lead events {date_str}: {total}")
+    return {
+        "agreement": agreement,
+        "meeting": meeting,
+        "success": success,
+        "revenue": revenue
+    }
+
 def amo_leads_created_metrics_range(start_date, end_date):
     if not amo_enabled():
         return {
@@ -591,7 +876,7 @@ def amo_leads_created_metrics_range(start_date, end_date):
 def merge_amo_counts(payload, date_str):
     if not amo_enabled():
         return payload
-    amo_metrics = amo_leads_created_metrics(date_str)
+    amo_metrics = amo_leads_event_metrics(date_str)
     amo_calls_1m = amo_calls_over_minute(date_str)
     if not amo_metrics or not (amo_metrics["success"] or amo_metrics["agreement"] or amo_metrics["meeting"] or amo_metrics["revenue"]):
         payload["amo_deals"] = {}
@@ -605,21 +890,23 @@ def merge_amo_counts(payload, date_str):
     amo_users = amo_fetch_users()
     all_ids = set(amo_metrics["success"]) | set(amo_metrics["agreement"]) | set(amo_metrics["meeting"]) | set(amo_metrics["revenue"])
     all_ids |= set(amo_calls_1m)
-    amo_ops = {oid: short_name(amo_users.get(oid, f"User {oid}")) for oid in all_ids}
+    amo_ops = {oid: short_name(amo_users.get(oid, f"User {oid}")) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
     amo_name_set = set(amo_ops.values())
     for oid in MOSCOW_OPERATOR_IDS:
+        if oid in EXCLUDED_OPERATOR_IDS:
+            continue
         name = short_name(OPERATORS.get(oid) or f"User {oid}")
         if oid not in amo_ops and name not in amo_name_set:
             amo_ops[oid] = name
     operators = payload.get("operators") or {}
     all_ids = set(operators) | set(amo_ops)
     payload["amo_operators"] = amo_ops
-    payload["amo_deals"] = {oid: amo_metrics["success"].get(oid, 0) for oid in all_ids}
-    payload["amo_agreements"] = {oid: amo_metrics["agreement"].get(oid, 0) for oid in all_ids}
-    payload["amo_meetings"] = {oid: amo_metrics["meeting"].get(oid, 0) for oid in all_ids}
-    payload["amo_success"] = {oid: amo_metrics["success"].get(oid, 0) for oid in all_ids}
-    payload["amo_revenue"] = {oid: amo_metrics["revenue"].get(oid, 0) for oid in all_ids}
-    payload["amo_calls_1m"] = {oid: amo_calls_1m.get(oid, 0) for oid in all_ids}
+    payload["amo_deals"] = {oid: amo_metrics["success"].get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
+    payload["amo_agreements"] = {oid: amo_metrics["agreement"].get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
+    payload["amo_meetings"] = {oid: amo_metrics["meeting"].get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
+    payload["amo_success"] = {oid: amo_metrics["success"].get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
+    payload["amo_revenue"] = {oid: amo_metrics["revenue"].get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
+    payload["amo_calls_1m"] = {oid: amo_calls_1m.get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
     return payload
 
 def build_operator_name_map(operators_map):
@@ -829,6 +1116,28 @@ def db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def fetch_existing_amo_ids(date_str):
+    conn = db_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT operator_id
+            FROM daily_operator_stats
+            WHERE date = ?
+              AND (
+                amo_calls_1m > 0
+                OR amo_agreements > 0
+                OR amo_meetings > 0
+                OR amo_deals > 0
+                OR amo_revenue > 0
+              )
+            """,
+            (date_str,),
+        ).fetchall()
+        return {row["operator_id"] for row in rows if row["operator_id"]}
+    finally:
+        conn.close()
+
 def get_setting(key, default=None):
     conn = db_connection()
     try:
@@ -984,7 +1293,7 @@ def get_day_stats_from_db(date_str):
     if not rows:
         return None
 
-    by_id = {row["operator_id"]: row for row in rows}
+    by_id = {row["operator_id"]: row for row in rows if row["operator_id"] not in EXCLUDED_OPERATOR_IDS}
     active_ids = {oid for oid, row in by_id.items() if (row["all_calls"] or 0) > 0}
     amo_ids = {
         oid for oid, row in by_id.items()
@@ -995,6 +1304,7 @@ def get_day_stats_from_db(date_str):
         or (row["amo_revenue"] or 0) > 0
         or oid in MOSCOW_OPERATOR_IDS
     }
+    amo_ids = {oid for oid in amo_ids if oid not in EXCLUDED_OPERATOR_IDS}
     operators = {oid: short_name(by_id[oid]["operator_name"] or oid) for oid in active_ids}
     amo_operators = {oid: short_name(by_id[oid]["operator_name"] or oid) for oid in amo_ids}
 
@@ -1107,6 +1417,8 @@ def get_report_data(start_date=None, end_date=None):
         "talk_count": 0
     }
     for row in rows:
+        if row["operator_id"] in EXCLUDED_OPERATOR_IDS:
+            continue
         talk_count = row["talk_count"] or 0
         talk_sum = row["talk_sum"] or 0
         avg = int(talk_sum / talk_count) if talk_count else 0
@@ -1203,6 +1515,8 @@ def get_moscow_report_data_db(start_date=None, end_date=None):
         "revenue": 0
     }
     for row in rows:
+        if row["operator_id"] in EXCLUDED_OPERATOR_IDS:
+            continue
         name = row["operator_name"]
         data = {
             "operator_id": row["operator_id"],
@@ -1465,12 +1779,27 @@ def upsert_daily_stats(date_str, stats):
         conn.close()
 
 def sync_day(date_str):
-    fetch_operators()
-    calls = fetch_calls_for_date(date_str, operators_map=OPERATORS)
+    try:
+        fetch_operators()
+    except Exception as e:
+        print(f"SipSpeak operators fetch failed: {e}")
+    try:
+        calls = fetch_calls_for_date(date_str, operators_map=OPERATORS)
+    except Exception as e:
+        print(f"SipSpeak calls fetch failed for {date_str}: {e}")
+        calls = []
     operators_from_calls = extract_operators_from_calls(calls)
     operators_map = OPERATORS or operators_from_calls
-    line_seconds = fetch_line_seconds(date_str, operators_map=operators_map)
-    ck_counts = ck_counts_from_sheet(date_str, operators_map)
+    try:
+        line_seconds = fetch_line_seconds(date_str, operators_map=operators_map)
+    except Exception as e:
+        print(f"SipSpeak line fetch failed for {date_str}: {e}")
+        line_seconds = {}
+    try:
+        ck_counts = ck_counts_from_sheet(date_str, operators_map)
+    except Exception as e:
+        print(f"CK sheet fetch failed for {date_str}: {e}")
+        ck_counts = {}
     stats = aggregate_calls(calls, operators_map=operators_map)
     if ck_counts is None:
         ck_counts = {}
@@ -1503,7 +1832,7 @@ def sync_day(date_str):
 
     if amo_enabled():
         try:
-            amo_metrics = amo_leads_created_metrics(date_str)
+            amo_metrics = amo_leads_event_metrics(date_str)
             amo_calls_1m = amo_calls_over_minute(date_str)
             amo_users = amo_fetch_users()
         except Exception as e:
@@ -1511,7 +1840,17 @@ def sync_day(date_str):
             amo_metrics = {"agreement": Counter(), "meeting": Counter(), "success": Counter(), "revenue": defaultdict(int)}
             amo_calls_1m = Counter()
             amo_users = {}
-        amo_ids = set(amo_metrics["agreement"]) | set(amo_metrics["meeting"]) | set(amo_metrics["success"]) | set(amo_metrics["revenue"]) | set(amo_calls_1m) | set(MOSCOW_OPERATOR_IDS)
+        existing_amo_ids = fetch_existing_amo_ids(date_str)
+        amo_ids = (
+            set(amo_metrics["agreement"])
+            | set(amo_metrics["meeting"])
+            | set(amo_metrics["success"])
+            | set(amo_metrics["revenue"])
+            | set(amo_calls_1m)
+            | set(MOSCOW_OPERATOR_IDS)
+            | set(existing_amo_ids)
+        )
+        amo_ids = {oid for oid in amo_ids if oid not in EXCLUDED_OPERATOR_IDS}
         for oid in amo_ids:
             if oid not in stats:
                 stats[oid] = {
@@ -1539,9 +1878,13 @@ def sync_day(date_str):
             stats[oid]["amo_revenue"] = amo_metrics["revenue"].get(oid, 0)
             if not stats[oid].get("name"):
                 stats[oid]["name"] = short_name(amo_users.get(oid, operators_map.get(oid, "")))
-        for oid in MOSCOW_OPERATOR_IDS:
+        for oid in MOSCOW_SIPSPEAK_AGREEMENTS_IDS:
             if oid in stats:
                 stats[oid]["amo_agreements"] = stats[oid].get("cs8", 0)
+
+    for oid in list(stats.keys()):
+        if oid in EXCLUDED_OPERATOR_IDS:
+            del stats[oid]
 
     for oid in stats:
         stats[oid].setdefault("amo_calls_1m", 0)
@@ -1586,7 +1929,7 @@ def fetch_operators():
                 if user.get("role") == "ROLE_OPERATOR":
                     uid = str(user.get("id") or "")
                     name = user.get("full_name") or user.get("fullName") or ""
-                    if uid and name:
+                    if uid and name and uid not in EXCLUDED_OPERATOR_IDS:
                         operators[uid] = name
             if len(items) < limit:
                 break
