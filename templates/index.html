@@ -455,7 +455,11 @@
 
     function getSelectedDate() {
       const input = document.getElementById('stats-date');
-      return input.value || toInputDate(todayText);
+      if (input && input.value) {
+        return input.value;
+      }
+      const fallback = toInputDate(todayText);
+      return fallback || defaultDate;
     }
 
     const branchConfigs = [
@@ -493,6 +497,8 @@
     let activeBranchIndex = 0;
     let serverOffsetMs = 0;
     let lastStatsData = null;
+    let statsTimerId = null;
+    let statsInFlight = false;
 
     function renderStats(data) {
       if (!data) return;
@@ -582,9 +588,15 @@
     }
 
     async function loadStats() {
-      const data = await fetchStats();
-      lastStatsData = data;
-      renderStats(lastStatsData);
+      if (statsInFlight) return;
+      statsInFlight = true;
+      try {
+        const data = await fetchStats();
+        lastStatsData = data;
+        renderStats(lastStatsData);
+      } finally {
+        statsInFlight = false;
+      }
     }
 
     const defaultDate = (() => {
@@ -594,15 +606,39 @@
       const dd = String(d.getDate()).padStart(2, '0');
       return `${yyyy}-${mm}-${dd}`;
     })();
-    document.getElementById('stats-date').value = toInputDate(todayText) || defaultDate;
-    document.getElementById('stats-apply').addEventListener('click', loadStats);
-
-    async function scheduleStatsRefresh() {
-      await loadStats();
-      setInterval(loadStats, 60000);
+    const statsDateInput = document.getElementById('stats-date');
+    const statsApplyBtn = document.getElementById('stats-apply');
+    if (statsDateInput) {
+      statsDateInput.value = toInputDate(todayText) || defaultDate;
+    } else {
+      console.warn('stats-date input not found');
+    }
+    if (statsApplyBtn) {
+      statsApplyBtn.addEventListener('click', loadStats);
+    } else {
+      console.warn('stats-apply button not found');
     }
 
-    scheduleStatsRefresh();
+    async function scheduleStatsRefresh() {
+      if (statsTimerId) return;
+      try {
+        await loadStats();
+      } catch (err) {
+        console.error('Initial stats load failed:', err);
+      }
+      statsTimerId = setInterval(() => {
+        loadStats().catch(err => console.error('Stats refresh failed:', err));
+      }, 60000);
+    }
+
+    window.loadStats = loadStats;
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        scheduleStatsRefresh();
+      }, { once: true });
+    } else {
+      scheduleStatsRefresh();
+    }
 
     const branches = branchConfigs.map(item => item.name);
     const branchEl = document.getElementById('branch-name');
@@ -627,7 +663,9 @@
       if (branchSwapInProgress) return;
       branchSwapInProgress = true;
       activeBranchIndex = branchIndex;
-      branchEl.textContent = branches[branchIndex];
+      if (branchEl) {
+        branchEl.textContent = branches[branchIndex];
+      }
       if (branchSwap) {
         branchSwap.classList.add('is-switching');
       }
@@ -691,10 +729,12 @@
 
     const topbar = document.getElementById('topbar');
     const topbarToggle = document.getElementById('topbar-toggle');
-    topbarToggle.addEventListener('click', () => {
-      topbar.classList.toggle('hidden');
-      topbarToggle.textContent = topbar.classList.contains('hidden') ? '▲' : '▼';
-    });
+    if (topbar && topbarToggle) {
+      topbarToggle.addEventListener('click', () => {
+        topbar.classList.toggle('hidden');
+        topbarToggle.textContent = topbar.classList.contains('hidden') ? '▲' : '▼';
+      });
+    }
 
     document.querySelectorAll('a[href]').forEach((link) => {
       if (link.origin !== window.location.origin) return;

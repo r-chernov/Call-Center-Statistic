@@ -6,6 +6,7 @@ import pytz
 from collections import Counter, defaultdict
 from apscheduler.schedulers.background import BackgroundScheduler
 import os
+import threading
 import inspect
 import re
 import time
@@ -2123,6 +2124,29 @@ def fetch_new_numbers_total_by_noactive():
     return data.get("totalCount", len(data.get("items", [])))
 
 sched = None
+SYNC_LOCK = threading.Lock()
+SYNC_IN_FLIGHT = set()
+LAST_SYNC_TS = {}
+SYNC_MIN_INTERVAL = 50
+
+def trigger_background_sync(date_str):
+    now = time.time()
+    with SYNC_LOCK:
+        last = LAST_SYNC_TS.get(date_str, 0)
+        if date_str in SYNC_IN_FLIGHT:
+            return False
+        if now - last < SYNC_MIN_INTERVAL:
+            return False
+        SYNC_IN_FLIGHT.add(date_str)
+        LAST_SYNC_TS[date_str] = now
+    def runner():
+        try:
+            sync_day(date_str)
+        finally:
+            with SYNC_LOCK:
+                SYNC_IN_FLIGHT.discard(date_str)
+    threading.Thread(target=runner, daemon=True).start()
+    return True
 
 def sync_yesterday():
     tz = pytz.timezone("Europe/Samara")
@@ -2428,9 +2452,16 @@ def stats():
     requested_date = request.args.get("date")
     if requested_date:
         today = datetime.now(pytz.timezone("Europe/Samara")).strftime("%d-%m-%Y")
-        if requested_date != today and has_date_in_db(requested_date) and has_call_data_for_date(requested_date):
+        if has_date_in_db(requested_date) and has_call_data_for_date(requested_date):
             fetch_operators()
             update_ck_lead_from_sheet(requested_date, OPERATORS)
+            cached = get_day_stats_from_db(requested_date)
+            if cached:
+                if requested_date == today:
+                    trigger_background_sync(requested_date)
+                return jsonify(cached)
+        if requested_date == today:
+            trigger_background_sync(requested_date)
             cached = get_day_stats_from_db(requested_date)
             if cached:
                 return jsonify(cached)
