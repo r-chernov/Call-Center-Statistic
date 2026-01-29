@@ -1611,7 +1611,24 @@ def filter_report_rows(rows, branch):
     if branch == "moscow":
         return [row for row in rows if row["operator_id"] in MOSCOW_OPERATOR_IDS]
     if branch == "ulyanovsk":
-        return [row for row in rows if row["operator_id"] not in MOSCOW_OPERATOR_IDS]
+        filtered = []
+        for row in rows:
+            if row["operator_id"] in MOSCOW_OPERATOR_IDS:
+                continue
+            sip_total = (
+                row.get("all", 0)
+                + row.get("total", 0)
+                + row.get("cs8", 0)
+                + row.get("cs20", 0)
+                + row.get("cs22", 0)
+                + row.get("lead_agent", 0)
+                + row.get("line", 0)
+                + row.get("ck_lead", 0)
+            )
+            if sip_total == 0:
+                continue
+            filtered.append(row)
+        return filtered
     return rows
 
 def recalc_report_totals(rows):
