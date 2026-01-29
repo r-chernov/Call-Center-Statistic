@@ -64,7 +64,7 @@ AMO_STATUS_MEETING_DONE = str(os.getenv("AMO_STATUS_MEETING_DONE", "79528826"))
 AMO_STATUS_MEETING_OK = str(os.getenv("AMO_STATUS_MEETING_OK", "79652190"))
 AMO_STATUS_DEAL_SUCCESS = str(os.getenv("AMO_STATUS_DEAL_SUCCESS", "142"))
 AMO_FIELD_MEETING_OK = str(os.getenv("AMO_FIELD_MEETING_OK", "964369"))
-AMO_FIELD_DEAL_SUM = str(os.getenv("AMO_FIELD_DEAL_SUM", "956237"))
+AMO_FIELD_DEAL_SUM = str(os.getenv("AMO_FIELD_DEAL_SUM", "964601"))
 AMO_DEBUG_EVENTS = os.getenv("AMO_DEBUG_EVENTS", "").lower() in ("1", "true", "yes", "y")
 
 MOSCOW_OPERATOR_IDS = {oid.strip() for oid in (os.getenv("MOSCOW_OPERATOR_IDS", "38").split(",")) if oid.strip()}
@@ -201,7 +201,6 @@ def amo_fetch_users():
         return AMO_USERS_CACHE["data"]
     users = {}
     page = 1
-    debug_seen = 0
     debug_seen = 0
     while True:
         try:
@@ -544,8 +543,6 @@ def amo_leads_event_metrics(date_str):
     start_ts, end_ts = amo_day_range(date_str)
     agreement_latest = {}
     status_latest = {}
-    meeting_leads = set()
-    success_leads = set()
     created_by_map = {}
     page = 1
     total = 0
@@ -713,10 +710,7 @@ def amo_leads_event_metrics(date_str):
             prev = status_latest.get(lead_id)
             if not prev or event_ts >= prev[0]:
                 status_latest[lead_id] = (event_ts, status_id)
-            if status_id == AMO_STATUS_MEETING_DONE:
-                meeting_leads.add(lead_id)
-            if status_id == AMO_STATUS_DEAL_SUCCESS:
-                success_leads.add(lead_id)
+            # keep only the latest status per lead; we'll decide counts from it
 
     def handle_field_event(event):
         nonlocal total, debug_seen
@@ -745,7 +739,7 @@ def amo_leads_event_metrics(date_str):
     fetch_events(["lead_status_changed"], handle_status_event)
     fetch_events(["custom_field_value_changed", f"custom_field_{AMO_FIELD_MEETING_OK}_value_changed"], handle_field_event)
 
-    lead_ids = set(agreement_latest.keys()) | set(status_latest.keys()) | set(meeting_leads) | set(success_leads)
+    lead_ids = set(agreement_latest.keys()) | set(status_latest.keys())
     lead_ids = list(lead_ids)
 
     lead_map = {}
@@ -787,13 +781,13 @@ def amo_leads_event_metrics(date_str):
         if rid:
             agreement[rid] += 1
     # Count unique leads that reached the status during the day
-    for lid in meeting_leads:
+    for lid, (ts, status_id) in status_latest.items():
         rid = lead_map.get(lid) or created_by_map.get(lid)
-        if rid:
+        if not rid:
+            continue
+        if status_id == AMO_STATUS_MEETING_DONE:
             meeting[rid] += 1
-    for lid in success_leads:
-        rid = lead_map.get(lid) or created_by_map.get(lid)
-        if rid:
+        if status_id == AMO_STATUS_DEAL_SUCCESS:
             success[rid] += 1
             amount = lead_amounts.get(lid, 0)
             if amount:
