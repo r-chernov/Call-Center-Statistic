@@ -73,6 +73,7 @@ EXCLUDED_OPERATOR_IDS = {oid.strip() for oid in (os.getenv("EXCLUDED_OPERATOR_ID
 AMO_CALL_MIN_SECONDS = int(os.getenv("AMO_CALL_MIN_SECONDS", "60"))
 NIGHTLY_SYNC_TIME = os.getenv("CALLCENTER_NIGHTLY_SYNC_TIME", "02:30")
 NIGHTLY_SYNC_DAYS = int(os.getenv("CALLCENTER_NIGHTLY_SYNC_DAYS", "0") or 0)
+REPORT_AUTO_SYNC = os.getenv("REPORT_AUTO_SYNC", "0").strip().lower() in {"1", "true", "yes", "y"}
 
 # === База данных ===
 DB_PATH = os.getenv("CALLCENTER_DB_PATH", os.path.join(app.root_path, "data", "callcenter.db"))
@@ -1085,6 +1086,14 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS empty_days (
+                date TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         cols = [row[1] for row in conn.execute("PRAGMA table_info(daily_operator_stats)")]
         if "lead_agent_calls" not in cols:
             conn.execute("ALTER TABLE daily_operator_stats ADD COLUMN lead_agent_calls INTEGER NOT NULL DEFAULT 0")
@@ -1166,6 +1175,28 @@ def list_saved_dates():
     finally:
         conn.close()
 
+def list_empty_dates():
+    conn = db_connection()
+    try:
+        rows = conn.execute("SELECT date FROM empty_days ORDER BY date").fetchall()
+        return [row["date"] for row in rows]
+    finally:
+        conn.close()
+
+def set_empty_day(date_str, is_empty):
+    conn = db_connection()
+    try:
+        if is_empty:
+            conn.execute(
+                "INSERT OR REPLACE INTO empty_days (date, updated_at) VALUES (?, ?)",
+                (date_str, datetime.now(pytz.timezone("Europe/Samara")).strftime("%Y-%m-%d %H:%M:%S")),
+            )
+        else:
+            conn.execute("DELETE FROM empty_days WHERE date = ?", (date_str,))
+        conn.commit()
+    finally:
+        conn.close()
+
 def ensure_range_synced(start_date, end_date):
     if not start_date or not end_date:
         return []
@@ -1188,6 +1219,24 @@ def ensure_range_synced(start_date, end_date):
             sync_day(ds)
         except Exception as e:
             print(f"Auto sync failed for {ds}: {e}")
+    return missing
+
+def get_missing_dates_range(start_date, end_date):
+    if not start_date or not end_date:
+        return []
+    start = parse_date(start_date)
+    end = parse_date(end_date)
+    if start > end:
+        start, end = end, start
+    available = set(list_saved_dates())
+    empty = set(list_empty_dates())
+    missing = []
+    d = start
+    while d <= end:
+        ds = format_date(d)
+        if ds not in available and ds not in empty:
+            missing.append(ds)
+        d += timedelta(days=1)
     return missing
 
 def get_ck_lead_counts_from_db(date_str):
@@ -1791,15 +1840,20 @@ def upsert_daily_stats(date_str, stats):
         conn.close()
 
 def sync_day(date_str):
+    sip_ok = True
+    ck_ok = True
+    amo_ok = True
     try:
         fetch_operators()
     except Exception as e:
         print(f"SipSpeak operators fetch failed: {e}")
+        sip_ok = False
     try:
         calls = fetch_calls_for_date(date_str, operators_map=OPERATORS)
     except Exception as e:
         print(f"SipSpeak calls fetch failed for {date_str}: {e}")
         calls = []
+        sip_ok = False
     operators_from_calls = extract_operators_from_calls(calls)
     operators_map = OPERATORS or operators_from_calls
     try:
@@ -1807,11 +1861,13 @@ def sync_day(date_str):
     except Exception as e:
         print(f"SipSpeak line fetch failed for {date_str}: {e}")
         line_seconds = {}
+        sip_ok = False
     try:
         ck_counts = ck_counts_from_sheet(date_str, operators_map)
     except Exception as e:
         print(f"CK sheet fetch failed for {date_str}: {e}")
         ck_counts = {}
+        ck_ok = False
     stats = aggregate_calls(calls, operators_map=operators_map)
     if ck_counts is None:
         ck_counts = {}
@@ -1852,6 +1908,7 @@ def sync_day(date_str):
             amo_metrics = {"agreement": Counter(), "meeting": Counter(), "success": Counter(), "revenue": defaultdict(int)}
             amo_calls_1m = Counter()
             amo_users = {}
+            amo_ok = False
         existing_amo_ids = fetch_existing_amo_ids(date_str)
         amo_ids = (
             set(amo_metrics["agreement"])
@@ -1904,6 +1961,25 @@ def sync_day(date_str):
         stats[oid].setdefault("amo_meetings", 0)
         stats[oid].setdefault("amo_deals", 0)
         stats[oid].setdefault("amo_revenue", 0)
+    total_activity = 0
+    for item in stats.values():
+        total_activity += (
+            item.get("all", 0)
+            + item.get("total", 0)
+            + item.get("cs8", 0)
+            + item.get("cs20", 0)
+            + item.get("cs22", 0)
+            + item.get("lead_agent", 0)
+            + item.get("line", 0)
+            + item.get("ck_lead", 0)
+            + item.get("amo_calls_1m", 0)
+            + item.get("amo_agreements", 0)
+            + item.get("amo_meetings", 0)
+            + item.get("amo_deals", 0)
+            + item.get("amo_revenue", 0)
+        )
+    empty_ok = (sip_ok and ck_ok and (amo_ok or not amo_enabled()) and total_activity == 0)
+    set_empty_day(date_str, empty_ok)
     upsert_daily_stats(date_str, stats)
     return {
         "date": date_str,
@@ -2227,7 +2303,9 @@ def report_data():
     start = request.args.get("start")
     end = request.args.get("end")
     branch = (request.args.get("branch") or "").lower()
-    if start and end:
+    sync_flag = (request.args.get("sync") or "").strip().lower() in {"1", "true", "yes", "y"}
+    missing_dates = get_missing_dates_range(start, end) if start and end else []
+    if (REPORT_AUTO_SYNC or sync_flag) and start and end:
         ensure_range_synced(start, end)
     if branch == "moscow":
         if not start or not end:
@@ -2235,13 +2313,16 @@ def report_data():
             if uly.get("range"):
                 start = start or uly["range"]["start"]
                 end = end or uly["range"]["end"]
-        return jsonify(get_moscow_report_data_db(start, end))
+        data = get_moscow_report_data_db(start, end)
+        data["missing_dates"] = missing_dates
+        return jsonify(data)
 
     data = get_report_data(start, end)
     rows = filter_report_rows(data.get("rows", []), "ulyanovsk")
     data["rows"] = rows
     data["totals"] = recalc_report_totals(rows)
     if branch == "ulyanovsk":
+        data["missing_dates"] = missing_dates
         return jsonify(data)
 
     range_start = start
@@ -2253,7 +2334,8 @@ def report_data():
     return jsonify({
         "range": data.get("range") or moscow.get("range"),
         "ulyanovsk": data,
-        "moscow": moscow
+        "moscow": moscow,
+        "missing_dates": missing_dates
     })
 
 @app.route('/report/export')
@@ -2264,7 +2346,8 @@ def report_export():
     start = request.args.get("start")
     end = request.args.get("end")
     branch = (request.args.get("branch") or "").lower()
-    if start and end:
+    sync_flag = (request.args.get("sync") or "").strip().lower() in {"1", "true", "yes", "y"}
+    if (REPORT_AUTO_SYNC or sync_flag) and start and end:
         ensure_range_synced(start, end)
     data = get_report_data(start, end)
     uly_rows = filter_report_rows(data.get("rows", []), "ulyanovsk")
@@ -2385,6 +2468,7 @@ def admin_db():
     start = request.args.get("start")
     end = request.args.get("end")
     available = list_saved_dates()
+    empty = list_empty_dates()
     missing = []
     if start and end:
         start_date = parse_date(start)
@@ -2392,15 +2476,18 @@ def admin_db():
         if start_date > end_date:
             start_date, end_date = end_date, start_date
         available_set = set(available)
+        empty_set = set(empty)
         d = start_date
         while d <= end_date:
             ds = format_date(d)
-            if ds not in available_set:
+            if ds not in available_set and ds not in empty_set:
                 missing.append(ds)
             d += timedelta(days=1)
+        empty = [d for d in empty if parse_date(d) >= start_date and parse_date(d) <= end_date]
     return jsonify({
         "available": available,
-        "missing": missing
+        "missing": missing,
+        "empty": empty
     })
 
 @app.route('/admin/nightly')

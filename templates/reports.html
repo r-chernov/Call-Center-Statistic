@@ -184,6 +184,55 @@
       gap: 10px;
     }
 
+    .missingBanner{
+      width: min(920px, 96vw);
+      background: rgba(10, 20, 15, 0.7);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 16px;
+      padding: 12px 14px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 14px;
+      box-shadow: 0 16px 30px rgba(0,0,0,0.35);
+      backdrop-filter: blur(8px);
+    }
+
+    .missingBanner.hidden{
+      display:none;
+    }
+
+    .missingBanner .text{
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+
+    .missingBanner .dates{
+      font-weight: 600;
+      opacity: 0.9;
+    }
+
+    .missingActions{
+      display:flex;
+      gap: 8px;
+      flex-wrap:wrap;
+    }
+
+    .missingBtn{
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.08);
+      color: var(--white);
+      cursor:pointer;
+      font-weight:700;
+      transition: 0.2s ease;
+    }
+    .missingBtn:hover{
+      background: rgba(255,255,255,0.12);
+      transform: translateY(-1px);
+    }
+
     .chip{
       display:flex;
       align-items:center;
@@ -276,6 +325,45 @@
       max-height: calc(100vh - 360px);
       overflow: auto;
       -webkit-overflow-scrolling: touch;
+      position: relative;
+    }
+
+    .reportLoader{
+      position:absolute;
+      inset: 10px;
+      border-radius: 16px;
+      background: rgba(6, 22, 16, 0.72);
+      backdrop-filter: blur(6px);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap: 14px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      color: #e9fff5;
+      z-index: 3;
+    }
+
+    .reportLoader.hidden{
+      display:none;
+    }
+
+    .spinner{
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.25);
+      border-top-color: #d9fff0;
+      animation: spin 0.9s linear infinite;
+    }
+
+    .loaderText{
+      font-size: 14px;
+      text-transform: uppercase;
+    }
+
+    @keyframes spin{
+      to { transform: rotate(360deg); }
     }
 
     .tableHead{
@@ -454,7 +542,6 @@
         <input type="date" id="dateFrom" value=""/>
         <span class="muted">→</span>
         <input type="date" id="dateTo" value=""/>
-        <button id="buildBtn">Сформировать</button>
       </div>
 
       <div class="chip">
@@ -473,6 +560,17 @@
       <button class="quickBtn" data-range="yesterday">Вчера</button>
       <button class="quickBtn" data-range="week">Неделя</button>
       <button class="quickBtn" data-range="month">Месяц</button>
+    </div>
+
+    <div class="missingBanner hidden" id="missing-banner">
+      <div>
+        <div class="text">В БД нет данных за даты:</div>
+        <div class="dates" id="missing-dates"></div>
+      </div>
+      <div class="missingActions">
+        <button class="missingBtn" id="missing-view">Смотреть что есть</button>
+        <button class="missingBtn" id="missing-sync">Синхронизировать</button>
+      </div>
     </div>
 
     <!-- KPI -->
@@ -553,6 +651,10 @@
       </div>
 
       <div class="tableScroll">
+        <div class="reportLoader hidden" id="report-loader">
+          <div class="spinner"></div>
+          <div class="loaderText" id="report-loader-text">Загрузка…</div>
+        </div>
         <table>
           <thead>
             <tr>
@@ -584,6 +686,10 @@
         </div>
       </div>
       <div class="tableScroll">
+        <div class="reportLoader hidden" id="report-loader-msk">
+          <div class="spinner"></div>
+          <div class="loaderText" id="report-loader-text-msk">Загрузка…</div>
+        </div>
         <table>
           <thead>
             <tr>
@@ -610,12 +716,36 @@
     const dateFrom = document.getElementById("dateFrom");
     const dateTo = document.getElementById("dateTo");
     const badge = document.getElementById("periodBadge");
+    const loader = document.getElementById("report-loader");
+    const loaderText = document.getElementById("report-loader-text");
+    const loaderMsk = document.getElementById("report-loader-msk");
+    const loaderTextMsk = document.getElementById("report-loader-text-msk");
+    const missingBanner = document.getElementById("missing-banner");
+    const missingDatesEl = document.getElementById("missing-dates");
+    const missingViewBtn = document.getElementById("missing-view");
+    const missingSyncBtn = document.getElementById("missing-sync");
+    let lastRequestId = 0;
+    let suppressedMissingKey = "";
 
     function fmt(d){
       const dd = String(d.getDate()).padStart(2,"0");
       const mm = String(d.getMonth()+1).padStart(2,"0");
       const yy = d.getFullYear();
       return `${dd}.${mm}.${yy}`;
+    }
+
+    function toLocalIso(date){
+      const yyyy = date.getFullYear();
+      const mm = String(date.getMonth()+1).padStart(2,"0");
+      const dd = String(date.getDate()).padStart(2,"0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    function parseIsoLocal(value){
+      if (!value) return null;
+      const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return null;
+      return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
     }
 
     function toApi(value){
@@ -635,7 +765,42 @@
         badge.textContent = "Период не выбран";
         return;
       }
-      badge.textContent = `${fmt(new Date(startIso))} - ${fmt(new Date(endIso))}`;
+      const startDate = parseIsoLocal(startIso);
+      const endDate = parseIsoLocal(endIso);
+      if (!startDate || !endDate) {
+        badge.textContent = "Период не выбран";
+        return;
+      }
+      badge.textContent = `${fmt(startDate)} - ${fmt(endDate)}`;
+    }
+
+    function setLoading(isLoading, message, branch){
+      const showUly = branch !== "moscow";
+      const showMsk = branch !== "ulyanovsk";
+      if (loader && showUly) {
+        if (isLoading) {
+          if (loaderText) {
+            loaderText.textContent = message || "Загрузка…";
+          }
+          loader.classList.remove("hidden");
+        } else {
+          loader.classList.add("hidden");
+        }
+      } else if (loader) {
+        loader.classList.add("hidden");
+      }
+      if (loaderMsk && showMsk) {
+        if (isLoading) {
+          if (loaderTextMsk) {
+            loaderTextMsk.textContent = message || "Загрузка…";
+          }
+          loaderMsk.classList.remove("hidden");
+        } else {
+          loaderMsk.classList.add("hidden");
+        }
+      } else if (loaderMsk) {
+        loaderMsk.classList.add("hidden");
+      }
     }
 
     function renderUlyTable(rows){
@@ -703,6 +868,35 @@
       document.getElementById("mRevenue").textContent = t.revenue ?? "—";
     }
 
+    function showMissingDates(missingDates, startIso, endIso, branchValue){
+      if (!missingBanner) return;
+      if (!missingDates || !missingDates.length) {
+        missingBanner.classList.add("hidden");
+        return;
+      }
+      const key = `${startIso || ""}|${endIso || ""}|${branchValue || "all"}`;
+      if (suppressedMissingKey === key) {
+        missingBanner.classList.add("hidden");
+        return;
+      }
+      if (missingDatesEl) {
+        missingDatesEl.textContent = missingDates.join(", ");
+      }
+      missingBanner.classList.remove("hidden");
+      if (missingViewBtn) {
+        missingViewBtn.onclick = () => {
+          suppressedMissingKey = key;
+          missingBanner.classList.add("hidden");
+        };
+      }
+      if (missingSyncBtn) {
+        missingSyncBtn.onclick = () => {
+          suppressedMissingKey = "";
+          fetchReport(startIso, endIso, true);
+        };
+      }
+    }
+
     function updateExportLink(startIso, endIso, branch){
       const link = document.getElementById("exportXlsx");
       const url = new URL("/report/export", window.location.origin);
@@ -717,19 +911,43 @@
       link.href = url.toString();
     }
 
-    async function fetchReport(startIso, endIso){
+    function getRangeFromInputs(){
+      return { startIso: dateFrom.value, endIso: dateTo.value };
+    }
+
+    function describeBranch(branch){
+      if (branch === "moscow") return "Московский филиал";
+      if (branch === "ulyanovsk") return "Ульяновский филиал";
+      return "общие показатели";
+    }
+
+    async function fetchReport(startIso, endIso, forceSync){
       const url = new URL("/report/data", window.location.origin);
       const branch = document.getElementById("branch").value;
-      if (startIso && endIso) {
-        url.searchParams.set("start", toApi(startIso));
-        url.searchParams.set("end", toApi(endIso));
+      const s = startIso || "";
+      const e = endIso || "";
+      if (s && e) {
+        url.searchParams.set("start", toApi(s));
+        url.searchParams.set("end", toApi(e));
       }
       if (branch) {
         url.searchParams.set("branch", branch);
       }
+      if (forceSync) {
+        url.searchParams.set("sync", "1");
+      }
+      const requestId = ++lastRequestId;
+      const branchValue = branch || "all";
+      const label = forceSync
+        ? `Синхронизация: ${describeBranch(branchValue)}`
+        : `Загрузка: ${describeBranch(branchValue)}`;
+      setLoading(true, label, branchValue);
       const res = await fetch(url);
       const data = await res.json();
-      const branchValue = branch || "all";
+      if (requestId !== lastRequestId) {
+        return;
+      }
+      setLoading(false, "", branchValue);
       const tableUly = document.getElementById("table-uly");
       const tableMsk = document.getElementById("table-msk");
       const kpiUly = document.getElementById("kpi-uly-block");
@@ -755,15 +973,19 @@
         kpiUly.style.display = "none";
         tableMsk.style.display = "";
         kpiMsk.style.display = "";
+        setLoading(false, "", "moscow");
         renderMoscowTable(data.rows || []);
         renderMoscowTotals(data.totals || {});
+        showMissingDates(data.missing_dates || [], startIso, endIso, branchValue);
       } else if (branchValue === "ulyanovsk") {
         tableUly.style.display = "";
         kpiUly.style.display = "";
         tableMsk.style.display = "none";
         kpiMsk.style.display = "none";
+        setLoading(false, "", "ulyanovsk");
         renderUlyTable(data.rows || []);
         renderUlyTotals(data.totals || {});
+        showMissingDates(data.missing_dates || [], startIso, endIso, branchValue);
       } else {
         tableUly.style.display = "";
         kpiUly.style.display = "";
@@ -775,6 +997,7 @@
         renderUlyTotals(uly.totals || {});
         renderMoscowTable(msk.rows || []);
         renderMoscowTotals(msk.totals || {});
+        showMissingDates(data.missing_dates || [], startIso, endIso, branchValue);
       }
     }
 
@@ -797,21 +1020,34 @@
         } else {
           return;
         }
-        const iso = x => x.toISOString().slice(0,10);
-        const startIso = iso(f);
-        const endIso = iso(t);
+        const startIso = toLocalIso(f);
+        const endIso = toLocalIso(t);
         dateFrom.value = startIso;
         dateTo.value = endIso;
         fetchReport(startIso, endIso);
       });
     });
 
-    document.getElementById("buildBtn").addEventListener("click", ()=>{
-      fetchReport(dateFrom.value, dateTo.value);
+    dateFrom.addEventListener("change", ()=>{
+      const { startIso, endIso } = getRangeFromInputs();
+      suppressedMissingKey = "";
+      if (startIso && endIso) {
+        fetchReport(startIso, endIso);
+      }
+    });
+
+    dateTo.addEventListener("change", ()=>{
+      const { startIso, endIso } = getRangeFromInputs();
+      suppressedMissingKey = "";
+      if (startIso && endIso) {
+        fetchReport(startIso, endIso);
+      }
     });
 
     document.getElementById("branch").addEventListener("change", ()=>{
-      fetchReport(dateFrom.value, dateTo.value);
+      const { startIso, endIso } = getRangeFromInputs();
+      suppressedMissingKey = "";
+      fetchReport(startIso, endIso);
     });
 
     fetchReport();

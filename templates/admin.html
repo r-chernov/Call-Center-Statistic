@@ -188,7 +188,7 @@
 
     .grid{
       display:grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, 1fr);
       gap: 16px;
       margin-top: 14px;
     }
@@ -257,6 +257,11 @@
       background: rgba(255, 255, 255, 0.06);
       border-color: rgba(255,255,255,0.08);
     }
+    .cal-emptyday{
+      background: rgba(255, 210, 100, 0.12);
+      border-color: rgba(255, 210, 100, 0.4);
+      color: #ffe5b0;
+    }
     .cal-selected{
       outline: 2px solid rgba(255,255,255,0.8);
     }
@@ -280,6 +285,7 @@
     }
     .lg-available{ background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255,255,255,0.18); }
     .lg-missing{ background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255,255,255,0.08); }
+    .lg-emptyday{ background: rgba(255, 210, 100, 0.12); border: 1px solid rgba(255, 210, 100, 0.4); }
   </style>
 </head>
 <body>
@@ -319,6 +325,10 @@
           <div class="title">Нет в базе</div>
           <div class="list" id="missing">—</div>
         </div>
+        <div>
+          <div class="title">Пустые дни</div>
+          <div class="list" id="empty">—</div>
+        </div>
       </div>
       <div class="calendar">
         <div class="calendar-header">
@@ -332,6 +342,7 @@
         <div class="legend">
           <span><i class="lg-available"></i> есть в базе</span>
           <span><i class="lg-missing"></i> нет в базе</span>
+          <span><i class="lg-emptyday"></i> пустой день</span>
         </div>
       </div>
     </section>
@@ -375,6 +386,7 @@
       const data = await res.json();
       document.getElementById('available').textContent = (data.available || []).join(', ') || '—';
       document.getElementById('missing').textContent = (data.missing || []).join(', ') || '—';
+      document.getElementById('empty').textContent = (data.empty || []).join(', ') || '—';
 
       if (!startInput.value && data.available && data.available.length) {
         startInput.value = toIso(data.available[0]);
@@ -399,7 +411,7 @@
       return new Date(year, month + 1, 0).getDate();
     }
 
-    function renderCalendar(year, month, available, missing) {
+    function renderCalendar(year, month, available, missing, emptyDays) {
       const grid = document.getElementById('calendar');
       const week = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
       grid.innerHTML = '';
@@ -421,6 +433,7 @@
       const total = daysInMonth(year, month);
       const availableSet = new Set(available);
       const missingSet = new Set(missing);
+      const emptySet = new Set(emptyDays);
 
       for (let day = 1; day <= total; day++) {
         const dt = new Date(year, month, day);
@@ -432,7 +445,9 @@
         const cell = document.createElement('div');
         cell.textContent = day;
         cell.className = 'cal-cell';
-        if (availableSet.has(api)) {
+        if (emptySet.has(api)) {
+          cell.classList.add('cal-emptyday');
+        } else if (availableSet.has(api)) {
           cell.classList.add('cal-available');
         } else if (missingSet.has(api)) {
           cell.classList.add('cal-missing');
@@ -465,7 +480,7 @@
       url.searchParams.set('end', end);
       const res = await fetch(url);
       const data = await res.json();
-      renderCalendar(y, m - 1, data.available || [], data.missing || []);
+      renderCalendar(y, m - 1, data.available || [], data.missing || [], data.empty || []);
     }
 
     document.getElementById('refresh').addEventListener('click', async () => {
