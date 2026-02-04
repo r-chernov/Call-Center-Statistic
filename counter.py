@@ -74,6 +74,7 @@ AMO_CALL_MIN_SECONDS = int(os.getenv("AMO_CALL_MIN_SECONDS", "60"))
 NIGHTLY_SYNC_TIME = os.getenv("CALLCENTER_NIGHTLY_SYNC_TIME", "02:30")
 NIGHTLY_SYNC_DAYS = int(os.getenv("CALLCENTER_NIGHTLY_SYNC_DAYS", "0") or 0)
 REPORT_AUTO_SYNC = os.getenv("REPORT_AUTO_SYNC", "0").strip().lower() in {"1", "true", "yes", "y"}
+USE_ACTIVE_CAMPAIGNS = os.getenv("USE_ACTIVE_CAMPAIGNS", "0").strip().lower() in {"1", "true", "yes", "y"}
 
 # === База данных ===
 DB_PATH = os.getenv("CALLCENTER_DB_PATH", os.path.join(app.root_path, "data", "callcenter.db"))
@@ -138,6 +139,26 @@ def normalize_name(value):
     if not value:
         return ""
     return " ".join(value.replace("ё", "е").replace("Ё", "Е").lower().split())
+
+def parse_names_list(value):
+    raw = value or ""
+    parts = re.split(r"[,\n;]+", raw)
+    return [p.strip() for p in parts if p.strip()]
+
+MOSCOW_OPERATOR_NAME_ALLOWLIST = {
+    normalize_name(short_name(name))
+    for name in parse_names_list(
+        os.getenv(
+            "MOSCOW_OPERATOR_NAMES",
+            "Самаркин Александр,Чисникова Валерия,Шарыхин Александр,Максим Клочков"
+        )
+    )
+}
+
+def moscow_name_allowed(name):
+    if not MOSCOW_OPERATOR_NAME_ALLOWLIST:
+        return True
+    return normalize_name(short_name(name)) in MOSCOW_OPERATOR_NAME_ALLOWLIST
 
 def parse_sheet_date(value):
     raw = (value or "").strip()
@@ -887,15 +908,18 @@ def merge_amo_counts(payload, date_str):
     all_ids = set(amo_metrics["success"]) | set(amo_metrics["agreement"]) | set(amo_metrics["meeting"]) | set(amo_metrics["revenue"])
     all_ids |= set(amo_calls_1m)
     amo_ops = {oid: short_name(amo_users.get(oid, f"User {oid}")) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
-    amo_name_set = set(amo_ops.values())
-    for oid in MOSCOW_OPERATOR_IDS:
-        if oid in EXCLUDED_OPERATOR_IDS:
-            continue
-        name = short_name(OPERATORS.get(oid) or f"User {oid}")
-        if oid not in amo_ops and name not in amo_name_set:
-            amo_ops[oid] = name
+    if not MOSCOW_OPERATOR_NAME_ALLOWLIST:
+        amo_name_set = set(amo_ops.values())
+        for oid in MOSCOW_OPERATOR_IDS:
+            if oid in EXCLUDED_OPERATOR_IDS:
+                continue
+            name = short_name(OPERATORS.get(oid) or f"User {oid}")
+            if oid not in amo_ops and name not in amo_name_set:
+                amo_ops[oid] = name
+    if MOSCOW_OPERATOR_NAME_ALLOWLIST:
+        amo_ops = {oid: name for oid, name in amo_ops.items() if moscow_name_allowed(name)}
     operators = payload.get("operators") or {}
-    all_ids = set(operators) | set(amo_ops)
+    all_ids = set(amo_ops) if MOSCOW_OPERATOR_NAME_ALLOWLIST else (set(operators) | set(amo_ops))
     payload["amo_operators"] = amo_ops
     payload["amo_deals"] = {oid: amo_metrics["success"].get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
     payload["amo_agreements"] = {oid: amo_metrics["agreement"].get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
@@ -1349,6 +1373,11 @@ def get_day_stats_from_db(date_str):
         or oid in MOSCOW_OPERATOR_IDS
     }
     amo_ids = {oid for oid in amo_ids if oid not in EXCLUDED_OPERATOR_IDS}
+    if MOSCOW_OPERATOR_NAME_ALLOWLIST:
+        amo_ids = {
+            oid for oid in amo_ids
+            if moscow_name_allowed(short_name(by_id[oid]["operator_name"] or oid))
+        }
     operators = {oid: short_name(by_id[oid]["operator_name"] or oid) for oid in active_ids}
     amo_operators = {oid: short_name(by_id[oid]["operator_name"] or oid) for oid in amo_ids}
 
@@ -1561,6 +1590,8 @@ def get_moscow_report_data_db(start_date=None, end_date=None):
     for row in rows:
         if row["operator_id"] in EXCLUDED_OPERATOR_IDS:
             continue
+        if not moscow_name_allowed(row["operator_name"]):
+            continue
         name = row["operator_name"]
         data = {
             "operator_id": row["operator_id"],
@@ -1613,6 +1644,8 @@ def amo_report_data(start_date=None, end_date=None):
     }
     for oid in all_ids:
         name = short_name(amo_users.get(oid, f"User {oid}"))
+        if not moscow_name_allowed(name):
+            continue
         row = {
             "operator_id": oid,
             "operator_name": name,
@@ -1629,22 +1662,23 @@ def amo_report_data(start_date=None, end_date=None):
         totals["deals"] += row["deals"]
         totals["revenue"] += row["revenue"]
 
-    amo_name_set = {short_name(name) for name in amo_users.values()}
-    for oid in MOSCOW_OPERATOR_IDS:
-        if oid in all_ids:
-            continue
-        name = short_name(OPERATORS.get(oid) or f"User {oid}")
-        if name in amo_name_set:
-            continue
-        rows.append({
-            "operator_id": oid,
-            "operator_name": name,
-            "calls_1m": 0,
-            "agreements": 0,
-            "meetings": 0,
-            "deals": 0,
-            "revenue": 0
-        })
+    if not MOSCOW_OPERATOR_NAME_ALLOWLIST:
+        amo_name_set = {short_name(name) for name in amo_users.values()}
+        for oid in MOSCOW_OPERATOR_IDS:
+            if oid in all_ids:
+                continue
+            name = short_name(OPERATORS.get(oid) or f"User {oid}")
+            if name in amo_name_set:
+                continue
+            rows.append({
+                "operator_id": oid,
+                "operator_name": name,
+                "calls_1m": 0,
+                "agreements": 0,
+                "meetings": 0,
+                "deals": 0,
+                "revenue": 0
+            })
 
     rows.sort(key=lambda r: r["operator_name"])
     return {
@@ -1658,6 +1692,8 @@ def filter_report_rows(rows, branch):
         return rows
     branch = branch.lower()
     if branch == "moscow":
+        if MOSCOW_OPERATOR_NAME_ALLOWLIST:
+            return [row for row in rows if moscow_name_allowed(row.get("operator_name", ""))]
         return [row for row in rows if row["operator_id"] in MOSCOW_OPERATOR_IDS]
     if branch == "ulyanovsk":
         filtered = []
@@ -2032,6 +2068,9 @@ def fetch_operators():
 def fetch_active_campaigns():
     """Получает список активных проектов"""
     global active_campaigns
+    if not USE_ACTIVE_CAMPAIGNS:
+        active_campaigns = []
+        return []
     try:
         print("Получение списка активных проектов...")
         params = [("active", "true")]
@@ -2047,12 +2086,14 @@ def fetch_active_campaigns():
 
 def fetch_new_numbers_total_by_active():
     """Получает количество новых номеров для активных проектов"""
-    if not active_campaigns:
-        fetch_active_campaigns()
-    
-    params = [("statuses[]", "1")]
-    for campaign_id in active_campaigns:
-        params.append(("campaign_ids[]", campaign_id))
+    if USE_ACTIVE_CAMPAIGNS:
+        if not active_campaigns:
+            fetch_active_campaigns()
+        params = [("statuses[]", "1")]
+        for campaign_id in active_campaigns:
+            params.append(("campaign_ids[]", campaign_id))
+    else:
+        params = [("statuses[]", "1")]
     params.append(("page", 1))
     params.append(("limit", 1))
 
@@ -2188,6 +2229,8 @@ def extract_operators_from_calls(calls):
 
 
 def fetch_new_numbers_total_by_noactive():
+    if not USE_ACTIVE_CAMPAIGNS:
+        return 0
     # Получаем исходный код функции fetch_new_numbers_total_by_active
     source = inspect.getsource(fetch_new_numbers_total_by_active)
     
@@ -2268,8 +2311,9 @@ def init_scheduler():
     global sched
     if sched is None:
         sched = BackgroundScheduler(timezone="Europe/Samara")
-        # Обновление списка активных проектов в 10:00
-        sched.add_job(fetch_active_campaigns, 'cron', hour=10, minute=0)
+        # Обновление списка активных проектов в 10:00 (если включено)
+        if USE_ACTIVE_CAMPAIGNS:
+            sched.add_job(fetch_active_campaigns, 'cron', hour=10, minute=0)
         # Автосинхронизация вчерашнего дня в 00:10
         sched.add_job(sync_yesterday, 'cron', hour=0, minute=10)
         # Полный синк ЦК из Google Sheets раз в день в 00:30

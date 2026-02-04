@@ -320,6 +320,10 @@
     tbody tr:hover{
       background: var(--hover);
     }
+    tbody tr.total-row{
+      background: rgba(255,255,255,0.12);
+      font-weight: 700;
+    }
 
     .indicator{
       display:flex;
@@ -573,10 +577,72 @@
         renderRows = Object.values(merged);
       }
 
+      const toSeconds = (val) => {
+        if (typeof val === 'string') {
+          const parts = val.split(':').map(p => parseInt(p, 10));
+          if (parts.length === 3 && parts.every(n => Number.isFinite(n))) {
+            return parts[0] * 3600 + parts[1] * 60 + parts[2];
+          }
+          if (parts.length === 2 && parts.every(n => Number.isFinite(n))) {
+            return parts[0] * 60 + parts[1];
+          }
+          const num = Number(val);
+          return Number.isFinite(num) ? num : 0;
+        }
+        if (typeof val === 'number') return val;
+        return 0;
+      };
+      const formatHMS = (totalSeconds) => {
+        const secs = Math.max(0, Math.floor(totalSeconds || 0));
+        const h = Math.floor(secs / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        const s = secs % 60;
+        return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+      };
+
       renderRows.forEach(row => {
         const cells = activeBranch.columns.map(col => `<td>${row[col.key] ?? ""}</td>`).join('');
         tbody.insertAdjacentHTML('beforeend', `<tr>${cells}</tr>`);
       });
+
+      if (activeBranch.source !== "amo" && renderRows.length > 0) {
+        const totals = {};
+        let avgWeightedSum = 0;
+        let avgWeight = 0;
+        activeBranch.columns.forEach(col => {
+          if (col.key !== "name") totals[col.key] = 0;
+        });
+        renderRows.forEach(row => {
+          activeBranch.columns.forEach(col => {
+            if (col.key === "name") return;
+            const val = row[col.key] ?? 0;
+            if (col.key === "avg") {
+              const weight = Number(row.total || 0) || 0;
+              avgWeightedSum += (Number(val) || 0) * weight;
+              avgWeight += weight;
+              return;
+            }
+            if (col.key === "line") {
+              totals[col.key] += toSeconds(val);
+            } else {
+              totals[col.key] += Number(val) || 0;
+            }
+          });
+        });
+        const totalRow = { name: "Итого" };
+        activeBranch.columns.forEach(col => {
+          if (col.key === "name") return;
+          if (col.key === "line") {
+            totalRow[col.key] = formatHMS(totals[col.key]);
+          } else if (col.key === "avg") {
+            totalRow[col.key] = avgWeight ? Math.floor(avgWeightedSum / avgWeight) : 0;
+          } else {
+            totalRow[col.key] = totals[col.key];
+          }
+        });
+        const totalCells = activeBranch.columns.map(col => `<td>${totalRow[col.key] ?? ""}</td>`).join('');
+        tbody.insertAdjacentHTML('beforeend', `<tr class="total-row">${totalCells}</tr>`);
+      }
     }
 
     async function fetchStats() {
