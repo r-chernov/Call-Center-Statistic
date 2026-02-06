@@ -1801,7 +1801,7 @@ def aggregate_calls(calls, operators_map=None):
         name = op.get("full_name") or op.get("fullName") or operators_map.get(oid, "") if operators_map else ""
         status = get_status_id(call)
         td = get_talk_duration(call)
-        is_dialog = status in STAT_FULL and td > 20
+        is_dialog = status in STAT_FULL and td >= 20
         stats[oid]["all"] += 1
         if is_dialog:
             stats[oid]["total"] += 1
@@ -2628,7 +2628,7 @@ def stats():
         if not operators_map or oid in operators_map:
             status = get_status_id(c)
             td = get_talk_duration(c)
-            if status in STAT_FULL and td > 20:
+            if status in STAT_FULL and td >= 20:
                 total_dialogs[oid] += 1
                 sums[oid] += td
                 cnts[oid] += 1
