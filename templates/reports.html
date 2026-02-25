@@ -430,6 +430,26 @@
       border-bottom: 1px solid var(--line);
     }
 
+    th.group-title{
+      text-align: center;
+      letter-spacing: 0.4px;
+    }
+
+    th.group-investor,
+    td.group-investor{
+      background: rgba(80, 180, 120, 0.12);
+    }
+
+    th.group-agent,
+    td.group-agent{
+      background: rgba(80, 130, 210, 0.12);
+    }
+
+    th.group-divider-left,
+    td.group-divider-left{
+      border-left: 2px solid rgba(255,255,255,0.22);
+    }
+
     tbody tr:hover{
       background: var(--hover);
     }
@@ -463,21 +483,12 @@
     }
 
     .kpiRow{
-      display:flex;
+      display:grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 10px;
-      flex-wrap:wrap;
       justify-content:center;
       width: min(1280px, 96vw);
       margin-top: 6px;
-    }
-
-    @media (min-width: 1024px){
-      .kpiRow{
-        flex-wrap: nowrap;
-      }
-      .kpi{
-        min-width: 150px;
-      }
     }
 
     .kpi{
@@ -485,7 +496,7 @@
       border: 1px solid var(--line);
       border-radius: 14px;
       padding: 12px 14px;
-      min-width: 170px;
+      min-width: 0;
       box-shadow: 0 12px 38px rgba(0,0,0,0.25);
       backdrop-filter: blur(10px);
     }
@@ -508,7 +519,7 @@
     /* адаптив */
     @media (max-width: 680px){
       h1{ font-size: 24px; }
-      .kpi{ min-width: 150px; }
+      .kpiRow{ grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); }
       th, td{ padding: 10px 10px; font-size: 13px; }
       .tableHead{ flex-direction:column; gap:10px; align-items:flex-start; }
       .tableHead .right{ justify-content:flex-start; }
@@ -598,12 +609,24 @@
         <div class="kVal" id="kAgree">—</div>
       </div>
       <div class="kpi">
-        <div class="kTitle">Лид Агент</div>
-        <div class="kVal" id="kLeadAgent">—</div>
+        <div class="kTitle">ЦК</div>
+        <div class="kVal" id="kInvCk">—</div>
       </div>
       <div class="kpi">
-        <div class="kTitle">ЦК Лид</div>
-        <div class="kVal" id="kCkLead">—</div>
+        <div class="kTitle">Агенты: Перевод</div>
+        <div class="kVal" id="kAgTransfer">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kTitle">Агенты: Согласие</div>
+        <div class="kVal" id="kAgAgree">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kTitle">Агенты: ЦА</div>
+        <div class="kVal" id="kAgCa">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kTitle">Общая</div>
+        <div class="kVal" id="kSummary">—</div>
       </div>
       <div class="kpi">
         <div class="kTitle">Среднее, сек</div>
@@ -658,20 +681,27 @@
         <table>
           <thead>
             <tr>
-              <th>Оператор</th>
-              <th>Всего</th>
-              <th>На линии</th>
-              <th>Диалогов</th>
-              <th>Перевод</th>
-              <th>Согласие</th>
-              <th>Лид Агент</th>
-              <th>ЦК Лид</th>
-              <th>Среднее, сек</th>
+              <th rowspan="2">Оператор</th>
+              <th rowspan="2">Всего</th>
+              <th rowspan="2">На линии</th>
+              <th rowspan="2">Диалогов</th>
+              <th colspan="3" class="group-title group-investor group-divider-left">Инвесторы</th>
+              <th colspan="3" class="group-title group-agent group-divider-left">Агенты</th>
+              <th rowspan="2">Общая</th>
+              <th rowspan="2">Среднее, сек</th>
+            </tr>
+            <tr>
+              <th class="group-investor group-divider-left">Перевод</th>
+              <th class="group-investor">Согласие</th>
+              <th class="group-investor">ЦК</th>
+              <th class="group-agent group-divider-left">Перевод</th>
+              <th class="group-agent">Согласие</th>
+              <th class="group-agent">ЦА</th>
             </tr>
           </thead>
           <tbody id="tbody">
             <tr>
-              <td class="muted" colspan="9">Нет данных</td>
+              <td class="muted" colspan="12">Нет данных</td>
             </tr>
           </tbody>
         </table>
@@ -806,7 +836,7 @@
     function renderUlyTable(rows){
       const tbody = document.getElementById("tbody");
       if (!rows.length) {
-        tbody.innerHTML = '<tr><td class=\"muted\" colspan=\"9\">Нет данных</td></tr>';
+        tbody.innerHTML = '<tr><td class=\"muted\" colspan=\"12\">Нет данных</td></tr>';
         return;
       }
       const formatHms = (value) => {
@@ -822,10 +852,13 @@
           <td>${r.all}</td>
           <td>${formatHms(r.line)}</td>
           <td>${r.total}</td>
-          <td>${r.cs20}</td>
-          <td>${r.cs8}</td>
-          <td>${r.lead_agent ?? 0}</td>
-          <td>${r.ck_lead ?? 0}</td>
+          <td class="group-investor group-divider-left">${r.cs20}</td>
+          <td class="group-investor">${r.cs8}</td>
+          <td class="group-investor">${r.inv_ck ?? 0}</td>
+          <td class="group-agent group-divider-left">${r.ag_transfer ?? 0}</td>
+          <td class="group-agent">${r.ag_agreement ?? 0}</td>
+          <td class="group-agent">${r.ag_ca ?? 0}</td>
+          <td>${(r.cs20 ?? 0) + (r.cs8 ?? 0) + (r.inv_ck ?? 0) + (r.ag_transfer ?? 0) + (r.ag_agreement ?? 0) + (r.ag_ca ?? 0)}</td>
           <td>${r.avg}</td>
         </tr>
       `).join("");
@@ -837,8 +870,12 @@
       document.getElementById("kDialogs").textContent = t.total ?? "—";
       document.getElementById("kTransfer").textContent = t.cs20 ?? "—";
       document.getElementById("kAgree").textContent = t.cs8 ?? "—";
-      document.getElementById("kLeadAgent").textContent = t.lead_agent ?? "—";
-      document.getElementById("kCkLead").textContent = t.ck_lead ?? "—";
+      document.getElementById("kInvCk").textContent = t.inv_ck ?? "—";
+      document.getElementById("kAgTransfer").textContent = t.ag_transfer ?? "—";
+      document.getElementById("kAgAgree").textContent = t.ag_agreement ?? "—";
+      document.getElementById("kAgCa").textContent = t.ag_ca ?? "—";
+      document.getElementById("kSummary").textContent =
+        (t.cs20 ?? 0) + (t.cs8 ?? 0) + (t.inv_ck ?? 0) + (t.ag_transfer ?? 0) + (t.ag_agreement ?? 0) + (t.ag_ca ?? 0);
       document.getElementById("kAvg").textContent = t.avg ?? "—";
     }
 
@@ -1066,17 +1103,3 @@
   </script>
 </body>
 </html>
-    .kpiBlock{
-      width: min(1280px, 96vw);
-      display:flex;
-      flex-direction:column;
-      gap: 8px;
-    }
-
-    .kpiBlockLabel{
-      font-weight: 800;
-      letter-spacing: 0.6px;
-      text-transform: uppercase;
-      opacity: 0.85;
-      padding-left: 6px;
-    }

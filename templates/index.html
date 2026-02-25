@@ -317,6 +317,26 @@
       border-bottom: 1px solid var(--line);
     }
 
+    th.group-title{
+      text-align: center;
+      letter-spacing: 0.4px;
+    }
+
+    th.group-investor,
+    td.group-investor{
+      background: rgba(80, 180, 120, 0.12);
+    }
+
+    th.group-agent,
+    td.group-agent{
+      background: rgba(80, 130, 210, 0.12);
+    }
+
+    th.group-divider-left,
+    td.group-divider-left{
+      border-left: 2px solid rgba(255,255,255,0.22);
+    }
+
     tbody tr:hover{
       background: var(--hover);
     }
@@ -476,10 +496,12 @@
           { key: "all", label: "Всего звонков" },
           { key: "line", label: "В линии" },
           { key: "total", label: "Диалогов" },
-          { key: "cs20", label: "Перевод" },
-          { key: "cs8", label: "Согласие" },
-          { key: "lead_agent", label: "Лид Агент" },
-          { key: "ck_lead", label: "ЦК Лид" },
+          { key: "inv_transfer", label: "Перевод", className: "group-investor group-divider-left" },
+          { key: "inv_agreement", label: "Согласие", className: "group-investor" },
+          { key: "inv_ck", label: "ЦК", className: "group-investor" },
+          { key: "ag_transfer", label: "Перевод", className: "group-agent group-divider-left" },
+          { key: "ag_agreement", label: "Согласие", className: "group-agent" },
+          { key: "ag_ca", label: "ЦА", className: "group-agent" },
           { key: "sum_stats", label: "Общая" },
           { key: "avg", label: "Среднее, сек" }
         ]
@@ -529,8 +551,31 @@
       document.getElementById('title-date').textContent = displayDate;
 
       const activeBranch = branchConfigs[activeBranchIndex];
-      const headerCells = activeBranch.columns.map(col => `<th>${col.label}</th>`).join('');
-      thead.innerHTML = `<tr>${headerCells}</tr>`;
+      if (activeBranch.source !== "amo") {
+        thead.innerHTML = `
+          <tr>
+            <th rowspan="2">Оператор</th>
+            <th rowspan="2">Всего звонков</th>
+            <th rowspan="2">В линии</th>
+            <th rowspan="2">Диалогов</th>
+            <th colspan="3" class="group-title group-investor group-divider-left">Инвесторы</th>
+            <th colspan="3" class="group-title group-agent group-divider-left">Агенты</th>
+            <th rowspan="2">Общая</th>
+            <th rowspan="2">Среднее, сек</th>
+          </tr>
+          <tr>
+            <th class="group-investor group-divider-left">Перевод</th>
+            <th class="group-investor">Согласие</th>
+            <th class="group-investor">ЦК</th>
+            <th class="group-agent group-divider-left">Перевод</th>
+            <th class="group-agent">Согласие</th>
+            <th class="group-agent">ЦА</th>
+          </tr>
+        `;
+      } else {
+        const headerCells = activeBranch.columns.map(col => `<th>${col.label}</th>`).join('');
+        thead.innerHTML = `<tr>${headerCells}</tr>`;
+      }
 
       const operatorSource = activeBranch.source === "amo"
         ? (data.amo_operators || {})
@@ -539,19 +584,32 @@
       const rows = [];
       Object.entries(operatorSource).forEach(([id, name]) => {
         if (activeBranch.operatorFilter && !activeBranch.operatorFilter(id)) return;
+        const getVal = (obj) => (obj && typeof obj === "object" ? (obj[id] || 0) : 0);
         rows.push({
           name,
-          all: data.all[id] || 0,
-          line: data.line[id] || 0,
-          total: data.total[id] || 0,
-          cs20: data.cs20[id] || 0,
+          all: getVal(data.all),
+          line: data.line?.[id] || 0,
+          total: getVal(data.total),
+          cs20: getVal(data.cs20),
           cs8: (activeBranch.source === "amo" && data.amo_agreements)
             ? (data.amo_agreements[id] || 0)
-            : (data.cs8[id] || 0),
-          lead_agent: data.lead_agent[id] || 0,
-          ck_lead: data.ck_lead[id] || 0,
-          avg: data.avg[id] || 0,
-          sum_stats: (data.cs20[id] || 0) + (data.cs8[id] || 0) + (data.lead_agent[id] || 0) + (data.ck_lead[id] || 0),
+            : getVal(data.cs8),
+          inv_transfer: getVal(data.cs20),
+          inv_agreement: getVal(data.cs8),
+          inv_ck: data.inv_ck?.[id] || 0,
+          ag_transfer: data.ag_transfer?.[id] || 0,
+          ag_agreement: data.ag_agreement?.[id] || 0,
+          ag_ca: data.ag_ca?.[id] || 0,
+          lead_agent: data.lead_agent?.[id] || 0,
+          ck_lead: data.ck_lead?.[id] || 0,
+          avg: data.avg?.[id] || 0,
+          sum_stats:
+            getVal(data.cs20)
+            + getVal(data.cs8)
+            + (data.inv_ck?.[id] || 0)
+            + (data.ag_transfer?.[id] || 0)
+            + (data.ag_agreement?.[id] || 0)
+            + (data.ag_ca?.[id] || 0),
           calls_1m: (data.amo_calls_1m && data.amo_calls_1m[id]) ? data.amo_calls_1m[id] : 0,
           meetings: (data.amo_meetings && data.amo_meetings[id]) ? data.amo_meetings[id] : 0,
           deals: (data.amo_deals && data.amo_deals[id]) ? data.amo_deals[id] : 0,
@@ -601,7 +659,7 @@
       };
 
       renderRows.forEach(row => {
-        const cells = activeBranch.columns.map(col => `<td>${row[col.key] ?? ""}</td>`).join('');
+        const cells = activeBranch.columns.map(col => `<td class="${col.className || ''}">${row[col.key] ?? ""}</td>`).join('');
         tbody.insertAdjacentHTML('beforeend', `<tr>${cells}</tr>`);
       });
 
@@ -640,7 +698,7 @@
             totalRow[col.key] = totals[col.key];
           }
         });
-        const totalCells = activeBranch.columns.map(col => `<td>${totalRow[col.key] ?? ""}</td>`).join('');
+        const totalCells = activeBranch.columns.map(col => `<td class="${col.className || ''}">${totalRow[col.key] ?? ""}</td>`).join('');
         tbody.insertAdjacentHTML('beforeend', `<tr class="total-row">${totalCells}</tr>`);
       }
     }

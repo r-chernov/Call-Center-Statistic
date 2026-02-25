@@ -65,6 +65,16 @@ AMO_STATUS_MEETING_OK = str(os.getenv("AMO_STATUS_MEETING_OK", "79652190"))
 AMO_STATUS_DEAL_SUCCESS = str(os.getenv("AMO_STATUS_DEAL_SUCCESS", "142"))
 AMO_FIELD_MEETING_OK = str(os.getenv("AMO_FIELD_MEETING_OK", "964369"))
 AMO_FIELD_DEAL_SUM = str(os.getenv("AMO_FIELD_DEAL_SUM", "964601"))
+AMO_FIELD_INV_CK = str(os.getenv("AMO_FIELD_INV_CK", "942511"))
+AMO_FIELD_AGENT_CA = str(os.getenv("AMO_FIELD_AGENT_CA", ""))
+AMO_INV_CK_VALUE = os.getenv("AMO_INV_CK_VALUE", "ЦК")
+AMO_AGENT_CA_VALUE = os.getenv("AMO_AGENT_CA_VALUE", "ЦА")
+AMO_INV_CK_ENUM_ID = str(os.getenv("AMO_INV_CK_ENUM_ID", "")).strip()
+AMO_AGENT_CA_ENUM_ID = str(os.getenv("AMO_AGENT_CA_ENUM_ID", "")).strip()
+AMO_PIPE_INVESTORS_ID = str(os.getenv("AMO_PIPE_INVESTORS_ID", "")).strip()
+AMO_PIPE_AGENTS_ID = str(os.getenv("AMO_PIPE_AGENTS_ID", "")).strip()
+AMO_PIPE_INVESTORS_NAME = os.getenv("AMO_PIPE_INVESTORS_NAME", "Воронка ФС")
+AMO_PIPE_AGENTS_NAME = os.getenv("AMO_PIPE_AGENTS_NAME", "Запросы агентов")
 AMO_DEBUG_EVENTS = os.getenv("AMO_DEBUG_EVENTS", "").lower() in ("1", "true", "yes", "y")
 
 MOSCOW_OPERATOR_IDS = {oid.strip() for oid in (os.getenv("MOSCOW_OPERATOR_IDS", "38").split(",")) if oid.strip()}
@@ -103,6 +113,8 @@ CS8        = ["8"]
 CS20       = ["20"]
 CS22       = ["22"]
 LEAD_AGENT = ["22","30"]
+AG_TRANSFER = ["36"]
+AG_AGREEMENT = ["22","37"]
 
 def get_talk_duration(call):
     td = call.get("talk_duration") or 0
@@ -249,6 +261,47 @@ def amo_fetch_users():
     AMO_USERS_CACHE["ts"] = now
     AMO_USERS_CACHE["data"] = users
     return users
+
+AMO_PIPELINES_CACHE = {"ts": 0, "name_to_id": {}}
+
+def amo_fetch_pipelines():
+    if not amo_enabled():
+        return {}
+    now = time.time()
+    if AMO_PIPELINES_CACHE["name_to_id"] and now - AMO_PIPELINES_CACHE["ts"] < AMO_USERS_CACHE_TTL:
+        return AMO_PIPELINES_CACHE["name_to_id"]
+    out = {}
+    page = 1
+    while True:
+        try:
+            r = amo_get("/api/v4/leads/pipelines", params={"limit": 250, "page": page})
+        except requests.RequestException as e:
+            print(f"AMO pipelines request error: {e}")
+            break
+        if r.status_code == 204:
+            break
+        if r.status_code != 200:
+            print(f"AMO pipelines HTTP {r.status_code}: {r.text}")
+            break
+        data = r.json()
+        pipes = data.get("_embedded", {}).get("pipelines", []) or []
+        if not pipes:
+            break
+        for pipe in pipes:
+            pid = str(pipe.get("id") or "").strip()
+            name = pipe.get("name") or ""
+            if pid and name:
+                out[normalize_name(name)] = pid
+        page += 1
+    AMO_PIPELINES_CACHE["ts"] = now
+    AMO_PIPELINES_CACHE["name_to_id"] = out
+    return out
+
+def amo_resolve_pipeline_id(pipeline_id, pipeline_name):
+    if pipeline_id:
+        return str(pipeline_id).strip()
+    lookup = amo_fetch_pipelines()
+    return lookup.get(normalize_name(pipeline_name), "")
 
 def amo_day_range(date_str):
     tz = pytz.timezone(AMO_TZ)
@@ -569,7 +622,6 @@ def amo_leads_event_metrics(date_str):
     page = 1
     total = 0
     debug_seen = 0
-    debug_seen = 0
 
     def extract_field_change(event):
         value_after = event.get("value_after")
@@ -823,6 +875,192 @@ def amo_leads_event_metrics(date_str):
         "revenue": revenue
     }
 
+def amo_ulya_invest_agent_metrics(date_str):
+    if not amo_enabled():
+        return {"inv_ck": Counter(), "ag_ca": Counter()}
+
+    inv_pipeline_id = amo_resolve_pipeline_id(AMO_PIPE_INVESTORS_ID, AMO_PIPE_INVESTORS_NAME)
+    ag_pipeline_id = amo_resolve_pipeline_id(AMO_PIPE_AGENTS_ID, AMO_PIPE_AGENTS_NAME)
+    field_specs = []
+    if AMO_FIELD_AGENT_CA:
+        field_specs.append({
+            "key": "ag_ca",
+            "field_id": str(AMO_FIELD_AGENT_CA),
+            "value_text": normalize_name(AMO_AGENT_CA_VALUE),
+            "enum_id": AMO_AGENT_CA_ENUM_ID,
+            "pipeline_id": ag_pipeline_id
+        })
+    if not field_specs:
+        return {"inv_ck": Counter(), "ag_ca": Counter()}
+
+    start_ts, end_ts = amo_day_range(date_str)
+    latest = {spec["key"]: {} for spec in field_specs}
+    created_by_map = {}
+
+    def extract_change(event):
+        value_after = event.get("value_after")
+        value_before = event.get("value_before")
+
+        if isinstance(value_after, list) and len(value_after) == 0:
+            items = value_before if isinstance(value_before, list) else [value_before]
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                cf = item.get("custom_field_value")
+                if isinstance(cf, dict):
+                    fid = cf.get("field_id") or cf.get("id")
+                    if fid is not None:
+                        return str(fid), []
+                fid = item.get("field_id") or item.get("id") or item.get("custom_field_id")
+                if fid is not None:
+                    return str(fid), []
+
+        items = value_after if isinstance(value_after, list) else ([value_after] if isinstance(value_after, dict) else [])
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            cf = item.get("custom_field_value")
+            if isinstance(cf, dict):
+                fid = cf.get("field_id") or cf.get("id")
+                if fid is None:
+                    continue
+                token = {
+                    "text": str(cf.get("text") if cf.get("text") is not None else (cf.get("value") if cf.get("value") is not None else "")).strip(),
+                    "enum_id": str(cf.get("enum_id") or "").strip()
+                }
+                return str(fid), [token]
+            fid = item.get("field_id") or item.get("id") or item.get("custom_field_id")
+            if fid is None:
+                continue
+            vals = item.get("values")
+            tokens = []
+            if isinstance(vals, list):
+                for v in vals:
+                    if isinstance(v, dict):
+                        tokens.append({
+                            "text": str(v.get("value") if v.get("value") is not None else "").strip(),
+                            "enum_id": str(v.get("enum_id") or "").strip()
+                        })
+                    else:
+                        tokens.append({"text": str(v).strip(), "enum_id": ""})
+            elif "value" in item:
+                tokens.append({"text": str(item.get("value") if item.get("value") is not None else "").strip(), "enum_id": ""})
+            return str(fid), tokens
+
+        return "", []
+
+    def is_positive(tokens, spec):
+        if not tokens:
+            return False
+        enum_id = spec.get("enum_id", "")
+        value_text = spec.get("value_text", "")
+        for token in tokens:
+            if enum_id and token.get("enum_id") == enum_id:
+                return True
+            txt = normalize_name(token.get("text", ""))
+            if value_text and txt == value_text:
+                return True
+        return False
+
+    def is_lead_event(event):
+        entity_type = (event.get("entity_type") or "").lower()
+        return entity_type in ("lead", "leads")
+
+    def fetch_events_for(spec):
+        page = 1
+        while True:
+            params = [
+                ("limit", 250),
+                ("page", page),
+                ("filter[created_at][from]", start_ts),
+                ("filter[created_at][to]", end_ts),
+                ("filter[type][]", "custom_field_value_changed"),
+                ("filter[type][]", f"custom_field_{spec['field_id']}_value_changed"),
+            ]
+            try:
+                r = amo_get("/api/v4/events", params=params)
+            except requests.RequestException as e:
+                print(f"AMO events request error: {e}")
+                break
+            if r.status_code == 204:
+                break
+            if r.status_code != 200:
+                print(f"AMO events HTTP {r.status_code}: {r.text}")
+                break
+            data = r.json()
+            events = data.get("_embedded", {}).get("events", []) or []
+            if not events:
+                break
+            for event in events:
+                if not is_lead_event(event):
+                    continue
+                lead_id = event.get("entity_id")
+                if not lead_id:
+                    continue
+                created_by = str(event.get("created_by") or "")
+                if created_by:
+                    created_by_map[lead_id] = created_by
+                fid, tokens = extract_change(event)
+                if fid != spec["field_id"]:
+                    continue
+                flag = is_positive(tokens, spec)
+                ts = event.get("created_at") or 0
+                prev = latest[spec["key"]].get(lead_id)
+                if not prev or ts >= prev[0]:
+                    latest[spec["key"]][lead_id] = (ts, flag)
+            page += 1
+
+    for spec in field_specs:
+        fetch_events_for(spec)
+
+    lead_ids = set()
+    for spec in field_specs:
+        lead_ids |= set(latest[spec["key"]].keys())
+    lead_ids = list(lead_ids)
+
+    lead_meta = {}
+    for i in range(0, len(lead_ids), 250):
+        chunk = lead_ids[i:i+250]
+        params = [("limit", 250)]
+        for lid in chunk:
+            params.append(("filter[id][]", str(lid)))
+        try:
+            r = amo_get("/api/v4/leads", params=params)
+        except requests.RequestException as e:
+            print(f"AMO leads request error: {e}")
+            continue
+        if r.status_code == 204:
+            continue
+        if r.status_code != 200:
+            print(f"AMO leads HTTP {r.status_code}: {r.text}")
+            continue
+        data = r.json()
+        leads = data.get("_embedded", {}).get("leads", []) or []
+        for lead in leads:
+            lid = lead.get("id")
+            if not lid:
+                continue
+            lead_meta[lid] = {
+                "responsible": str(lead.get("responsible_user_id") or ""),
+                "pipeline_id": str(lead.get("pipeline_id") or "")
+            }
+
+    result = {"inv_ck": Counter(), "ag_ca": Counter()}
+    for spec in field_specs:
+        key = spec["key"]
+        target_pipeline = spec["pipeline_id"]
+        for lid, (_, flag) in latest[key].items():
+            if not flag:
+                continue
+            meta = lead_meta.get(lid, {})
+            if target_pipeline and str(meta.get("pipeline_id") or "") != str(target_pipeline):
+                continue
+            rid = str(meta.get("responsible") or "") or created_by_map.get(lid, "")
+            if rid:
+                result[key][rid] += 1
+
+    return result
+
 def amo_leads_created_metrics_range(start_date, end_date):
     if not amo_enabled():
         return {
@@ -894,6 +1132,7 @@ def merge_amo_counts(payload, date_str):
     if not amo_enabled():
         return payload
     amo_metrics = amo_leads_event_metrics(date_str)
+    ulya_amo = amo_ulya_invest_agent_metrics(date_str)
     amo_calls_1m = amo_calls_over_minute(date_str)
     if not amo_metrics or not (amo_metrics["success"] or amo_metrics["agreement"] or amo_metrics["meeting"] or amo_metrics["revenue"]):
         payload["amo_deals"] = {}
@@ -903,6 +1142,8 @@ def merge_amo_counts(payload, date_str):
         payload["amo_success"] = {}
         payload["amo_revenue"] = {}
         payload["amo_calls_1m"] = {oid: amo_calls_1m.get(oid, 0) for oid in amo_calls_1m}
+        payload["inv_ck"] = {oid: (payload.get("ck_lead", {}) or {}).get(oid, 0) for oid in (payload.get("operators") or {})}
+        payload["ag_ca"] = {oid: ulya_amo["ag_ca"].get(oid, 0) for oid in (payload.get("operators") or {})}
         return payload
     amo_users = amo_fetch_users()
     all_ids = set(amo_metrics["success"]) | set(amo_metrics["agreement"]) | set(amo_metrics["meeting"]) | set(amo_metrics["revenue"])
@@ -927,6 +1168,9 @@ def merge_amo_counts(payload, date_str):
     payload["amo_success"] = {oid: amo_metrics["success"].get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
     payload["amo_revenue"] = {oid: amo_metrics["revenue"].get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
     payload["amo_calls_1m"] = {oid: amo_calls_1m.get(oid, 0) for oid in all_ids if oid not in EXCLUDED_OPERATOR_IDS}
+    op_ids = set(payload.get("operators") or {})
+    payload["inv_ck"] = {oid: (payload.get("ck_lead", {}) or {}).get(oid, 0) for oid in op_ids}
+    payload["ag_ca"] = {oid: ulya_amo["ag_ca"].get(oid, 0) for oid in op_ids}
     return payload
 
 def build_operator_name_map(operators_map):
@@ -1096,6 +1340,10 @@ def init_db():
                 cs20_calls INTEGER NOT NULL,
                 cs22_calls INTEGER NOT NULL,
                 lead_agent_calls INTEGER NOT NULL DEFAULT 0,
+                ag_transfer_calls INTEGER NOT NULL DEFAULT 0,
+                ag_agreement_calls INTEGER NOT NULL DEFAULT 0,
+                inv_ck_calls INTEGER NOT NULL DEFAULT 0,
+                ag_ca_calls INTEGER NOT NULL DEFAULT 0,
                 line_calls INTEGER NOT NULL DEFAULT 0,
                 ck_lead_calls INTEGER NOT NULL DEFAULT 0,
                 amo_calls_1m INTEGER NOT NULL DEFAULT 0,
@@ -1121,6 +1369,14 @@ def init_db():
         cols = [row[1] for row in conn.execute("PRAGMA table_info(daily_operator_stats)")]
         if "lead_agent_calls" not in cols:
             conn.execute("ALTER TABLE daily_operator_stats ADD COLUMN lead_agent_calls INTEGER NOT NULL DEFAULT 0")
+        if "ag_transfer_calls" not in cols:
+            conn.execute("ALTER TABLE daily_operator_stats ADD COLUMN ag_transfer_calls INTEGER NOT NULL DEFAULT 0")
+        if "ag_agreement_calls" not in cols:
+            conn.execute("ALTER TABLE daily_operator_stats ADD COLUMN ag_agreement_calls INTEGER NOT NULL DEFAULT 0")
+        if "inv_ck_calls" not in cols:
+            conn.execute("ALTER TABLE daily_operator_stats ADD COLUMN inv_ck_calls INTEGER NOT NULL DEFAULT 0")
+        if "ag_ca_calls" not in cols:
+            conn.execute("ALTER TABLE daily_operator_stats ADD COLUMN ag_ca_calls INTEGER NOT NULL DEFAULT 0")
         if "line_calls" not in cols:
             conn.execute("ALTER TABLE daily_operator_stats ADD COLUMN line_calls INTEGER NOT NULL DEFAULT 0")
         if "ck_lead_calls" not in cols:
@@ -1158,6 +1414,8 @@ def fetch_existing_amo_ids(date_str):
                 OR amo_meetings > 0
                 OR amo_deals > 0
                 OR amo_revenue > 0
+                OR inv_ck_calls > 0
+                OR ag_ca_calls > 0
               )
             """,
             (date_str,),
@@ -1340,6 +1598,10 @@ def get_day_stats_from_db(date_str):
                 total_calls,
                 cs8_calls,
                 cs20_calls,
+                ag_transfer_calls,
+                ag_agreement_calls,
+                inv_ck_calls,
+                ag_ca_calls,
                 lead_agent_calls,
                 line_calls,
                 ck_lead_calls,
@@ -1362,7 +1624,12 @@ def get_day_stats_from_db(date_str):
         return None
 
     by_id = {row["operator_id"]: row for row in rows if row["operator_id"] not in EXCLUDED_OPERATOR_IDS}
-    active_ids = {oid for oid, row in by_id.items() if (row["all_calls"] or 0) > 0}
+    active_ids = {
+        oid for oid, row in by_id.items()
+        if (row["all_calls"] or 0) > 0
+        or (row["inv_ck_calls"] or 0) > 0
+        or (row["ag_ca_calls"] or 0) > 0
+    }
     amo_ids = {
         oid for oid, row in by_id.items()
         if (row["amo_calls_1m"] or 0) > 0
@@ -1396,6 +1663,10 @@ def get_day_stats_from_db(date_str):
         "total": {oid: by_id[oid]["total_calls"] or 0 for oid in operators},
         "cs8": {oid: by_id[oid]["cs8_calls"] or 0 for oid in operators},
         "cs20": {oid: by_id[oid]["cs20_calls"] or 0 for oid in operators},
+        "ag_transfer": {oid: by_id[oid]["ag_transfer_calls"] or 0 for oid in operators},
+        "ag_agreement": {oid: by_id[oid]["ag_agreement_calls"] or 0 for oid in operators},
+        "inv_ck": {oid: by_id[oid]["inv_ck_calls"] or 0 for oid in operators},
+        "ag_ca": {oid: by_id[oid]["ag_ca_calls"] or 0 for oid in operators},
         "lead_agent": {oid: by_id[oid]["lead_agent_calls"] or 0 for oid in operators},
         "ck_lead": {oid: by_id[oid]["ck_lead_calls"] or 0 for oid in operators},
         "avg": {oid: avg_for(by_id[oid]) for oid in operators},
@@ -1462,6 +1733,10 @@ def get_report_data(start_date=None, end_date=None):
                 SUM(cs20_calls) AS cs20_calls,
                 SUM(cs22_calls) AS cs22_calls,
                 SUM(lead_agent_calls) AS lead_agent_calls,
+                SUM(ag_transfer_calls) AS ag_transfer_calls,
+                SUM(ag_agreement_calls) AS ag_agreement_calls,
+                SUM(inv_ck_calls) AS inv_ck_calls,
+                SUM(ag_ca_calls) AS ag_ca_calls,
                 SUM(line_calls) AS line_calls,
                 SUM(ck_lead_calls) AS ck_lead_calls,
                 SUM(talk_sum) AS talk_sum,
@@ -1484,6 +1759,10 @@ def get_report_data(start_date=None, end_date=None):
         "cs20": 0,
         "cs22": 0,
         "lead_agent": 0,
+        "ag_transfer": 0,
+        "ag_agreement": 0,
+        "inv_ck": 0,
+        "ag_ca": 0,
         "line": 0,
         "ck_lead": 0,
         "talk_sum": 0,
@@ -1504,6 +1783,10 @@ def get_report_data(start_date=None, end_date=None):
             "cs20": row["cs20_calls"] or 0,
             "cs22": row["cs22_calls"] or 0,
             "lead_agent": row["lead_agent_calls"] or 0,
+            "ag_transfer": row["ag_transfer_calls"] or 0,
+            "ag_agreement": row["ag_agreement_calls"] or 0,
+            "inv_ck": row["inv_ck_calls"] or 0,
+            "ag_ca": row["ag_ca_calls"] or 0,
             "line": row["line_calls"] or 0,
             "ck_lead": row["ck_lead_calls"] or 0,
             "avg": avg,
@@ -1516,6 +1799,10 @@ def get_report_data(start_date=None, end_date=None):
         totals["cs20"] += row["cs20_calls"] or 0
         totals["cs22"] += row["cs22_calls"] or 0
         totals["lead_agent"] += row["lead_agent_calls"] or 0
+        totals["ag_transfer"] += row["ag_transfer_calls"] or 0
+        totals["ag_agreement"] += row["ag_agreement_calls"] or 0
+        totals["inv_ck"] += row["inv_ck_calls"] or 0
+        totals["ag_ca"] += row["ag_ca_calls"] or 0
         totals["line"] += row["line_calls"] or 0
         totals["ck_lead"] += row["ck_lead_calls"] or 0
         totals["talk_sum"] += talk_sum
@@ -1534,6 +1821,10 @@ def get_report_data(start_date=None, end_date=None):
             "cs20": totals["cs20"],
             "cs22": totals["cs22"],
             "lead_agent": totals["lead_agent"],
+            "ag_transfer": totals["ag_transfer"],
+            "ag_agreement": totals["ag_agreement"],
+            "inv_ck": totals["inv_ck"],
+            "ag_ca": totals["ag_ca"],
             "line": totals["line"],
             "ck_lead": totals["ck_lead"],
             "avg": avg_total,
@@ -1707,6 +1998,10 @@ def filter_report_rows(rows, branch):
                 + row.get("cs20", 0)
                 + row.get("cs22", 0)
                 + row.get("lead_agent", 0)
+                + row.get("ag_transfer", 0)
+                + row.get("ag_agreement", 0)
+                + row.get("inv_ck", 0)
+                + row.get("ag_ca", 0)
                 + row.get("line", 0)
                 + row.get("ck_lead", 0)
             )
@@ -1724,6 +2019,10 @@ def recalc_report_totals(rows):
         "cs20": 0,
         "cs22": 0,
         "lead_agent": 0,
+        "ag_transfer": 0,
+        "ag_agreement": 0,
+        "inv_ck": 0,
+        "ag_ca": 0,
         "line": 0,
         "ck_lead": 0,
         "talk_sum": 0,
@@ -1736,6 +2035,10 @@ def recalc_report_totals(rows):
         totals["cs20"] += row.get("cs20", 0)
         totals["cs22"] += row.get("cs22", 0)
         totals["lead_agent"] += row.get("lead_agent", 0)
+        totals["ag_transfer"] += row.get("ag_transfer", 0)
+        totals["ag_agreement"] += row.get("ag_agreement", 0)
+        totals["inv_ck"] += row.get("inv_ck", 0)
+        totals["ag_ca"] += row.get("ag_ca", 0)
         totals["line"] += row.get("line", 0)
         totals["ck_lead"] += row.get("ck_lead", 0)
         totals["talk_sum"] += row.get("talk_sum", 0)
@@ -1749,6 +2052,10 @@ def recalc_report_totals(rows):
         "cs20": totals["cs20"],
         "cs22": totals["cs22"],
         "lead_agent": totals["lead_agent"],
+        "ag_transfer": totals["ag_transfer"],
+        "ag_agreement": totals["ag_agreement"],
+        "inv_ck": totals["inv_ck"],
+        "ag_ca": totals["ag_ca"],
         "line": totals["line"],
         "ck_lead": totals["ck_lead"],
         "avg": avg_total,
@@ -1815,6 +2122,10 @@ def aggregate_calls(calls, operators_map=None):
             stats[oid]["cs22"] += 1
         if status in LEAD_AGENT:
             stats[oid]["lead_agent"] += 1
+        if status in AG_TRANSFER:
+            stats[oid]["ag_transfer"] += 1
+        if status in AG_AGREEMENT:
+            stats[oid]["ag_agreement"] += 1
         if name:
             stats[oid]["name"] = name
     return stats
@@ -1828,8 +2139,8 @@ def upsert_daily_stats(date_str, stats):
             conn.execute(
                 """
                 INSERT INTO daily_operator_stats
-                (date, operator_id, operator_name, all_calls, total_calls, cs8_calls, cs20_calls, cs22_calls, lead_agent_calls, line_calls, ck_lead_calls, amo_calls_1m, amo_agreements, amo_meetings, amo_deals, amo_revenue, talk_sum, talk_count, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (date, operator_id, operator_name, all_calls, total_calls, cs8_calls, cs20_calls, cs22_calls, lead_agent_calls, ag_transfer_calls, ag_agreement_calls, inv_ck_calls, ag_ca_calls, line_calls, ck_lead_calls, amo_calls_1m, amo_agreements, amo_meetings, amo_deals, amo_revenue, talk_sum, talk_count, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(date, operator_id) DO UPDATE SET
                     operator_name=excluded.operator_name,
                     all_calls=excluded.all_calls,
@@ -1838,6 +2149,10 @@ def upsert_daily_stats(date_str, stats):
                     cs20_calls=excluded.cs20_calls,
                     cs22_calls=excluded.cs22_calls,
                     lead_agent_calls=excluded.lead_agent_calls,
+                    ag_transfer_calls=excluded.ag_transfer_calls,
+                    ag_agreement_calls=excluded.ag_agreement_calls,
+                    inv_ck_calls=excluded.inv_ck_calls,
+                    ag_ca_calls=excluded.ag_ca_calls,
                     line_calls=excluded.line_calls,
                     ck_lead_calls=excluded.ck_lead_calls,
                     amo_calls_1m=excluded.amo_calls_1m,
@@ -1859,6 +2174,10 @@ def upsert_daily_stats(date_str, stats):
                     data["cs20"],
                     data["cs22"],
                     data["lead_agent"],
+                    data.get("ag_transfer", 0),
+                    data.get("ag_agreement", 0),
+                    data.get("inv_ck", 0),
+                    data.get("ag_ca", 0),
                     data["line"],
                     data["ck_lead"],
                     data.get("amo_calls_1m", 0),
@@ -1916,8 +2235,12 @@ def sync_day(date_str):
                 "cs20": 0,
                 "cs22": 0,
                 "lead_agent": 0,
+                "ag_transfer": 0,
+                "ag_agreement": 0,
+                "ag_ca": 0,
                 "line": 0,
                 "ck_lead": count,
+                "inv_ck": count,
                 "amo_calls_1m": 0,
                 "amo_agreements": 0,
                 "amo_meetings": 0,
@@ -1929,6 +2252,7 @@ def sync_day(date_str):
             }
         else:
             stats[oid]["ck_lead"] = count
+            stats[oid]["inv_ck"] = count
     for oid, seconds in line_seconds.items():
         stats[oid]["line"] = seconds
         if not stats[oid].get("name"):
@@ -1938,11 +2262,13 @@ def sync_day(date_str):
         try:
             amo_metrics = amo_leads_event_metrics(date_str)
             amo_calls_1m = amo_calls_over_minute(date_str)
+            ulya_amo = amo_ulya_invest_agent_metrics(date_str)
             amo_users = amo_fetch_users()
         except Exception as e:
             print(f"AMO sync failed for {date_str}: {e}")
             amo_metrics = {"agreement": Counter(), "meeting": Counter(), "success": Counter(), "revenue": defaultdict(int)}
             amo_calls_1m = Counter()
+            ulya_amo = {"inv_ck": Counter(), "ag_ca": Counter()}
             amo_users = {}
             amo_ok = False
         existing_amo_ids = fetch_existing_amo_ids(date_str)
@@ -1952,6 +2278,7 @@ def sync_day(date_str):
             | set(amo_metrics["success"])
             | set(amo_metrics["revenue"])
             | set(amo_calls_1m)
+            | set(ulya_amo["ag_ca"])
             | set(MOSCOW_OPERATOR_IDS)
             | set(existing_amo_ids)
         )
@@ -1965,6 +2292,10 @@ def sync_day(date_str):
                     "cs20": 0,
                     "cs22": 0,
                     "lead_agent": 0,
+                    "ag_transfer": 0,
+                    "ag_agreement": 0,
+                    "inv_ck": 0,
+                    "ag_ca": 0,
                     "line": 0,
                     "ck_lead": 0,
                     "amo_calls_1m": 0,
@@ -1981,6 +2312,7 @@ def sync_day(date_str):
             stats[oid]["amo_meetings"] = amo_metrics["meeting"].get(oid, 0)
             stats[oid]["amo_deals"] = amo_metrics["success"].get(oid, 0)
             stats[oid]["amo_revenue"] = amo_metrics["revenue"].get(oid, 0)
+            stats[oid]["ag_ca"] = ulya_amo["ag_ca"].get(oid, stats[oid].get("ag_ca", 0))
             if not stats[oid].get("name"):
                 stats[oid]["name"] = short_name(amo_users.get(oid, operators_map.get(oid, "")))
         for oid in MOSCOW_SIPSPEAK_AGREEMENTS_IDS:
@@ -1997,6 +2329,10 @@ def sync_day(date_str):
         stats[oid].setdefault("amo_meetings", 0)
         stats[oid].setdefault("amo_deals", 0)
         stats[oid].setdefault("amo_revenue", 0)
+        stats[oid].setdefault("ag_transfer", 0)
+        stats[oid].setdefault("ag_agreement", 0)
+        stats[oid].setdefault("inv_ck", 0)
+        stats[oid].setdefault("ag_ca", 0)
     total_activity = 0
     for item in stats.values():
         total_activity += (
@@ -2006,6 +2342,10 @@ def sync_day(date_str):
             + item.get("cs20", 0)
             + item.get("cs22", 0)
             + item.get("lead_agent", 0)
+            + item.get("ag_transfer", 0)
+            + item.get("ag_agreement", 0)
+            + item.get("inv_ck", 0)
+            + item.get("ag_ca", 0)
             + item.get("line", 0)
             + item.get("ck_lead", 0)
             + item.get("amo_calls_1m", 0)
@@ -2340,7 +2680,7 @@ def dashboard():
 
 @app.route('/reports')
 def reports():
-    return send_file(os.path.join(app.root_path, 'templates', 'reports.html'))
+    return render_template('reports.html')
 
 @app.route('/report/data')
 def report_data():
@@ -2405,8 +2745,21 @@ def report_export():
         range_end = range_end or data["range"]["end"]
 
     def write_uly_sheet(ws, rows, totals):
-        ws.append(["Оператор", "Всего", "На линии", "Диалогов", "Перевод", "Согласие", "Лид Агент", "ЦК Лид", "Среднее, сек"])
+        ws.append([
+            "Оператор", "Всего", "На линии", "Диалогов",
+            "Инвесторы: Перевод", "Инвесторы: Согласие", "Инвесторы: ЦК",
+            "Агенты: Перевод", "Агенты: Согласие", "Агенты: ЦА",
+            "Общая", "Среднее, сек"
+        ])
         for row in rows:
+            total_sum = (
+                row.get("cs20", 0)
+                + row.get("cs8", 0)
+                + row.get("inv_ck", 0)
+                + row.get("ag_transfer", 0)
+                + row.get("ag_agreement", 0)
+                + row.get("ag_ca", 0)
+            )
             ws.append([
                 row["operator_name"],
                 row["all"],
@@ -2414,12 +2767,23 @@ def report_export():
                 row["total"],
                 row["cs20"],
                 row["cs8"],
-                row.get("lead_agent", 0),
-                row.get("ck_lead", 0),
+                row.get("inv_ck", 0),
+                row.get("ag_transfer", 0),
+                row.get("ag_agreement", 0),
+                row.get("ag_ca", 0),
+                total_sum,
                 row["avg"]
             ])
         if totals:
             ws.append([])
+            total_sum = (
+                totals.get("cs20", 0)
+                + totals.get("cs8", 0)
+                + totals.get("inv_ck", 0)
+                + totals.get("ag_transfer", 0)
+                + totals.get("ag_agreement", 0)
+                + totals.get("ag_ca", 0)
+            )
             ws.append([
                 "ИТОГО",
                 totals.get("all", 0),
@@ -2427,8 +2791,11 @@ def report_export():
                 totals.get("total", 0),
                 totals.get("cs20", 0),
                 totals.get("cs8", 0),
-                totals.get("lead_agent", 0),
-                totals.get("ck_lead", 0),
+                totals.get("inv_ck", 0),
+                totals.get("ag_transfer", 0),
+                totals.get("ag_agreement", 0),
+                totals.get("ag_ca", 0),
+                total_sum,
                 totals.get("avg", 0)
             ])
 
@@ -2594,9 +2961,12 @@ def stats():
     requested_date = request.args.get("date")
     if requested_date:
         today = datetime.now(pytz.timezone("Europe/Samara")).strftime("%d-%m-%Y")
-        if has_date_in_db(requested_date) and has_call_data_for_date(requested_date):
-            fetch_operators()
-            update_ck_lead_from_sheet(requested_date, OPERATORS)
+        if has_date_in_db(requested_date):
+            try:
+                fetch_operators()
+                update_ck_lead_from_sheet(requested_date, OPERATORS)
+            except Exception as e:
+                print(f"Fast cache refresh failed for {requested_date}: {e}")
             cached = get_day_stats_from_db(requested_date)
             if cached:
                 if requested_date == today:
@@ -2607,6 +2977,42 @@ def stats():
             cached = get_day_stats_from_db(requested_date)
             if cached:
                 return jsonify(cached)
+            try:
+                fetch_operators()
+            except Exception as e:
+                print(f"Operators preload failed for {requested_date}: {e}")
+            operators_filtered = {
+                oid: short_name(name)
+                for oid, name in (OPERATORS or {}).items()
+                if oid not in EXCLUDED_OPERATOR_IDS
+            }
+            empty_map = {oid: 0 for oid in operators_filtered}
+            empty_hms = {oid: "00:00:00" for oid in operators_filtered}
+            return jsonify({
+                "operators": operators_filtered,
+                "amo_operators": {},
+                "status": {oid: "" for oid in operators_filtered},
+                "all": dict(empty_map),
+                "line": empty_hms,
+                "total": dict(empty_map),
+                "cs8": dict(empty_map),
+                "cs20": dict(empty_map),
+                "ag_transfer": dict(empty_map),
+                "ag_agreement": dict(empty_map),
+                "inv_ck": dict(empty_map),
+                "ag_ca": dict(empty_map),
+                "lead_agent": dict(empty_map),
+                "ck_lead": dict(empty_map),
+                "avg": dict(empty_map),
+                "amo_calls_1m": {},
+                "amo_agreements": {},
+                "amo_meetings": {},
+                "amo_deals": {},
+                "amo_revenue": {},
+                "new": 0,
+                "new_noactive": 0,
+                "server_time": int(time.time() * 1000)
+            })
         sync_day(requested_date)
         cached = get_day_stats_from_db(requested_date)
         if cached:
@@ -2618,7 +3024,10 @@ def stats():
     total_dialogs = defaultdict(int)
     cs8     = fetch_counts(CS8, requested_date=requested_date, operators_map=operators_map)
     cs20    = fetch_counts(CS20, requested_date=requested_date, operators_map=operators_map)
+    ag_transfer = fetch_counts(AG_TRANSFER, requested_date=requested_date, operators_map=operators_map)
+    ag_agreement = fetch_counts(AG_AGREEMENT, requested_date=requested_date, operators_map=operators_map)
     lead_agent = fetch_counts(LEAD_AGENT, requested_date=requested_date, operators_map=operators_map)
+    ck_counts = ck_counts_from_sheet(requested_date or datetime.now(pytz.timezone("Europe/Samara")).strftime("%d-%m-%Y"), operators_map) or Counter()
     allc    = fetch_all_counts(requested_date=requested_date, operators_map=operators_map)
     new_tot = fetch_new_numbers_total_by_active()
     new_noactive_tot = fetch_new_numbers_total_by_noactive()
@@ -2639,7 +3048,7 @@ def stats():
     active_operator_ids = {oid for oid, count in allc.items() if count > 0}
     operators_filtered = {oid: short_name(name) for oid, name in operators_map.items() if oid in active_operator_ids}
 
-    empty_metric = {oid: 0 for oid in operators_filtered}
+    ck_metric = {oid: ck_counts.get(oid, 0) for oid in operators_filtered}
     payload = {
         "operators": operators_filtered,
         "status":    {oid: status.get(oid) for oid in operators_filtered},
@@ -2648,8 +3057,12 @@ def stats():
         "total":     {oid: total_dialogs.get(oid, 0) for oid in operators_filtered},
         "cs8":       {oid: cs8.get(oid, 0) for oid in operators_filtered},
         "cs20":      {oid: cs20.get(oid, 0) for oid in operators_filtered},
+        "ag_transfer": {oid: ag_transfer.get(oid, 0) for oid in operators_filtered},
+        "ag_agreement": {oid: ag_agreement.get(oid, 0) for oid in operators_filtered},
+        "inv_ck": dict(ck_metric),
+        "ag_ca": {oid: 0 for oid in operators_filtered},
         "lead_agent": {oid: lead_agent.get(oid, 0) for oid in operators_filtered},
-        "ck_lead":   empty_metric,
+        "ck_lead":   ck_metric,
         "avg":       {oid: avg.get(oid, 0) for oid in operators_filtered},
         "new":       new_tot,
         "new_noactive": new_noactive_tot,
