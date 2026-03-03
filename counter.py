@@ -113,8 +113,8 @@ CS8        = ["8"]
 CS20       = ["20"]
 CS22       = ["22"]
 LEAD_AGENT = ["22","30"]
-AG_TRANSFER = ["36"]
-AG_AGREEMENT = ["22","37"]
+AG_TRANSFER = ["36", "20"]
+AG_AGREEMENT = ["37", "22"]
 
 def get_talk_duration(call):
     td = call.get("talk_duration") or 0
@@ -1585,6 +1585,28 @@ def has_call_data_for_date(date_str):
     finally:
         conn.close()
 
+def has_nonzero_stats_for_date(date_str):
+    conn = db_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM daily_operator_stats
+            WHERE date = ?
+              AND (
+                all_calls > 0 OR total_calls > 0 OR cs8_calls > 0 OR cs20_calls > 0 OR cs22_calls > 0
+                OR lead_agent_calls > 0 OR ag_transfer_calls > 0 OR ag_agreement_calls > 0
+                OR inv_ck_calls > 0 OR ag_ca_calls > 0 OR line_calls > 0 OR ck_lead_calls > 0
+                OR amo_calls_1m > 0 OR amo_agreements > 0 OR amo_meetings > 0 OR amo_deals > 0 OR amo_revenue > 0
+              )
+            LIMIT 1
+            """,
+            (date_str,)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
 def get_day_stats_from_db(date_str):
     moscow_ids = list(MOSCOW_OPERATOR_IDS) or ["__none__"]
     conn = db_connection()
@@ -2087,6 +2109,8 @@ def aggregate_calls(calls, operators_map=None):
         "cs20": 0,
         "cs22": 0,
         "lead_agent": 0,
+        "ag_transfer": 0,
+        "ag_agreement": 0,
         "line": 0,
         "ck_lead": 0,
         "amo_calls_1m": 0,
@@ -2224,6 +2248,48 @@ def sync_day(date_str):
         ck_counts = {}
         ck_ok = False
     stats = aggregate_calls(calls, operators_map=operators_map)
+    # Надежный пересчет агентских метрик отдельными фильтрованными запросами.
+    # Это защищает от случаев, когда в полном списке звонков формат статуса отличается.
+    try:
+        ag_transfer_counts = fetch_counts(AG_TRANSFER, requested_date=date_str, operators_map=operators_map)
+        ag_agreement_counts = fetch_counts(AG_AGREEMENT, requested_date=date_str, operators_map=operators_map)
+    except Exception as e:
+        print(f"SipSpeak agent status fetch failed for {date_str}: {e}")
+        ag_transfer_counts = Counter()
+        ag_agreement_counts = Counter()
+    if ag_transfer_counts or ag_agreement_counts:
+        for oid in (set(stats) | set(ag_transfer_counts) | set(ag_agreement_counts)):
+            if oid not in stats:
+                stats[oid] = {
+                    "all": 0,
+                    "total": 0,
+                    "cs8": 0,
+                    "cs20": 0,
+                    "cs22": 0,
+                    "lead_agent": 0,
+                    "ag_transfer": 0,
+                    "ag_agreement": 0,
+                    "line": 0,
+                    "ck_lead": 0,
+                    "amo_calls_1m": 0,
+                    "amo_agreements": 0,
+                    "amo_meetings": 0,
+                    "amo_deals": 0,
+                    "amo_revenue": 0,
+                    "talk_sum": 0,
+                    "talk_count": 0,
+                    "name": operators_map.get(oid, "")
+                }
+            stats[oid]["ag_transfer"] = ag_transfer_counts.get(oid, 0)
+            stats[oid]["ag_agreement"] = ag_agreement_counts.get(oid, 0)
+    if not sip_ok and not calls and has_date_in_db(date_str):
+        cached = get_day_stats_from_db(date_str)
+        print(f"Sync skipped for {date_str}: SipSpeak unavailable, keeping existing DB data")
+        return {
+            "date": date_str,
+            "operators": len(cached.get("operators", {})) if cached else 0,
+            "calls": 0
+        }
     if ck_counts is None:
         ck_counts = {}
     for oid, count in ck_counts.items():
@@ -2598,6 +2664,22 @@ SYNC_LOCK = threading.Lock()
 SYNC_IN_FLIGHT = set()
 LAST_SYNC_TS = {}
 SYNC_MIN_INTERVAL = 50
+DB_READY = False
+DB_READY_LOCK = threading.Lock()
+
+def ensure_db_ready():
+    global DB_READY
+    if DB_READY:
+        return
+    with DB_READY_LOCK:
+        if DB_READY:
+            return
+        init_db()
+        DB_READY = True
+
+@app.before_request
+def ensure_app_ready():
+    ensure_db_ready()
 
 def trigger_background_sync(date_str):
     now = time.time()
@@ -2958,17 +3040,62 @@ def admin_ck_sync():
 
 @app.route('/stats')
 def stats():
+    def empty_stats_payload(server_error=None):
+        payload = {
+            "operators": {},
+            "amo_operators": {},
+            "status": {},
+            "all": {},
+            "line": {},
+            "total": {},
+            "cs8": {},
+            "cs20": {},
+            "ag_transfer": {},
+            "ag_agreement": {},
+            "inv_ck": {},
+            "ag_ca": {},
+            "lead_agent": {},
+            "ck_lead": {},
+            "avg": {},
+            "amo_calls_1m": {},
+            "amo_agreements": {},
+            "amo_meetings": {},
+            "amo_deals": {},
+            "amo_revenue": {},
+            "new": 0,
+            "new_noactive": 0,
+            "server_time": int(time.time() * 1000)
+        }
+        if server_error:
+            payload["error"] = server_error
+        return payload
+
     requested_date = request.args.get("date")
     if requested_date:
         today = datetime.now(pytz.timezone("Europe/Samara")).strftime("%d-%m-%Y")
         if has_date_in_db(requested_date):
+            cached = get_day_stats_from_db(requested_date)
+            has_data = has_nonzero_stats_for_date(requested_date)
+            is_empty_day = requested_date in set(list_empty_dates())
+            if requested_date != today and not is_empty_day:
+                try:
+                    sync_day(requested_date)
+                    refreshed = get_day_stats_from_db(requested_date)
+                    if refreshed:
+                        return jsonify(refreshed)
+                except Exception as e:
+                    print(f"Historical sync failed for {requested_date}: {e}")
+                    if cached and has_data:
+                        return jsonify(cached)
             try:
                 fetch_operators()
                 update_ck_lead_from_sheet(requested_date, OPERATORS)
             except Exception as e:
                 print(f"Fast cache refresh failed for {requested_date}: {e}")
             cached = get_day_stats_from_db(requested_date)
-            if cached:
+            has_data = has_nonzero_stats_for_date(requested_date)
+            is_empty_day = requested_date in set(list_empty_dates())
+            if cached and (has_data or is_empty_day or requested_date == today):
                 if requested_date == today:
                     trigger_background_sync(requested_date)
                 return jsonify(cached)
@@ -2978,98 +3105,78 @@ def stats():
             if cached:
                 return jsonify(cached)
             try:
-                fetch_operators()
+                sync_day(requested_date)
             except Exception as e:
-                print(f"Operators preload failed for {requested_date}: {e}")
-            operators_filtered = {
-                oid: short_name(name)
-                for oid, name in (OPERATORS or {}).items()
-                if oid not in EXCLUDED_OPERATOR_IDS
-            }
-            empty_map = {oid: 0 for oid in operators_filtered}
-            empty_hms = {oid: "00:00:00" for oid in operators_filtered}
-            return jsonify({
-                "operators": operators_filtered,
-                "amo_operators": {},
-                "status": {oid: "" for oid in operators_filtered},
-                "all": dict(empty_map),
-                "line": empty_hms,
-                "total": dict(empty_map),
-                "cs8": dict(empty_map),
-                "cs20": dict(empty_map),
-                "ag_transfer": dict(empty_map),
-                "ag_agreement": dict(empty_map),
-                "inv_ck": dict(empty_map),
-                "ag_ca": dict(empty_map),
-                "lead_agent": dict(empty_map),
-                "ck_lead": dict(empty_map),
-                "avg": dict(empty_map),
-                "amo_calls_1m": {},
-                "amo_agreements": {},
-                "amo_meetings": {},
-                "amo_deals": {},
-                "amo_revenue": {},
-                "new": 0,
-                "new_noactive": 0,
-                "server_time": int(time.time() * 1000)
-            })
-        sync_day(requested_date)
+                print(f"Immediate sync failed for {requested_date}: {e}")
+                return jsonify(empty_stats_payload(server_error=str(e)))
+            cached = get_day_stats_from_db(requested_date)
+            if cached:
+                return jsonify(cached)
+            return jsonify(empty_stats_payload(server_error="Нет данных после синхронизации"))
+        try:
+            sync_day(requested_date)
+        except Exception as e:
+            print(f"Stats sync failed for {requested_date}: {e}")
         cached = get_day_stats_from_db(requested_date)
         if cached:
             return jsonify(cached)
-    fetch_operators()
-    calls   = fetch_all_calls_details(requested_date=requested_date, operators_map=OPERATORS)
-    operators_from_calls = extract_operators_from_calls(calls)
-    operators_map = OPERATORS or operators_from_calls
-    total_dialogs = defaultdict(int)
-    cs8     = fetch_counts(CS8, requested_date=requested_date, operators_map=operators_map)
-    cs20    = fetch_counts(CS20, requested_date=requested_date, operators_map=operators_map)
-    ag_transfer = fetch_counts(AG_TRANSFER, requested_date=requested_date, operators_map=operators_map)
-    ag_agreement = fetch_counts(AG_AGREEMENT, requested_date=requested_date, operators_map=operators_map)
-    lead_agent = fetch_counts(LEAD_AGENT, requested_date=requested_date, operators_map=operators_map)
-    ck_counts = ck_counts_from_sheet(requested_date or datetime.now(pytz.timezone("Europe/Samara")).strftime("%d-%m-%Y"), operators_map) or Counter()
-    allc    = fetch_all_counts(requested_date=requested_date, operators_map=operators_map)
-    new_tot = fetch_new_numbers_total_by_active()
-    new_noactive_tot = fetch_new_numbers_total_by_noactive()
-    sums, cnts = defaultdict(int), defaultdict(int)
-    for c in calls:
-        oid = str(c.get("operator",{}).get("id") or "")
-        if not operators_map or oid in operators_map:
-            status = get_status_id(c)
-            td = get_talk_duration(c)
-            if status in STAT_FULL and td >= 20:
-                total_dialogs[oid] += 1
-                sums[oid] += td
-                cnts[oid] += 1
-    avg    = {oid:(sums[oid]//cnts[oid] if cnts[oid] else 0) for oid in operators_map}
-    status = fetch_current_status(requested_date=requested_date, operators_map=operators_map)
-    line_times = fetch_line_times(requested_date=requested_date, operators_map=operators_map)
+    try:
+        fetch_operators()
+        calls   = fetch_all_calls_details(requested_date=requested_date, operators_map=OPERATORS)
+        operators_from_calls = extract_operators_from_calls(calls)
+        operators_map = OPERATORS or operators_from_calls
+        total_dialogs = defaultdict(int)
+        cs8     = fetch_counts(CS8, requested_date=requested_date, operators_map=operators_map)
+        cs20    = fetch_counts(CS20, requested_date=requested_date, operators_map=operators_map)
+        ag_transfer = fetch_counts(AG_TRANSFER, requested_date=requested_date, operators_map=operators_map)
+        ag_agreement = fetch_counts(AG_AGREEMENT, requested_date=requested_date, operators_map=operators_map)
+        lead_agent = fetch_counts(LEAD_AGENT, requested_date=requested_date, operators_map=operators_map)
+        ck_counts = ck_counts_from_sheet(requested_date or datetime.now(pytz.timezone("Europe/Samara")).strftime("%d-%m-%Y"), operators_map) or Counter()
+        allc    = fetch_all_counts(requested_date=requested_date, operators_map=operators_map)
+        new_tot = fetch_new_numbers_total_by_active()
+        new_noactive_tot = fetch_new_numbers_total_by_noactive()
+        sums, cnts = defaultdict(int), defaultdict(int)
+        for c in calls:
+            oid = str(c.get("operator",{}).get("id") or "")
+            if not operators_map or oid in operators_map:
+                status_id = get_status_id(c)
+                td = get_talk_duration(c)
+                if status_id in STAT_FULL and td >= 20:
+                    total_dialogs[oid] += 1
+                    sums[oid] += td
+                    cnts[oid] += 1
+        avg    = {oid:(sums[oid]//cnts[oid] if cnts[oid] else 0) for oid in operators_map}
+        status = fetch_current_status(requested_date=requested_date, operators_map=operators_map)
+        line_times = fetch_line_times(requested_date=requested_date, operators_map=operators_map)
 
-    active_operator_ids = {oid for oid, count in allc.items() if count > 0}
-    operators_filtered = {oid: short_name(name) for oid, name in operators_map.items() if oid in active_operator_ids}
+        active_operator_ids = {oid for oid, count in allc.items() if count > 0}
+        operators_filtered = {oid: short_name(name) for oid, name in operators_map.items() if oid in active_operator_ids}
 
-    ck_metric = {oid: ck_counts.get(oid, 0) for oid in operators_filtered}
-    payload = {
-        "operators": operators_filtered,
-        "status":    {oid: status.get(oid) for oid in operators_filtered},
-        "all":       {oid: allc.get(oid, 0) for oid in operators_filtered},
-        "line":      {oid: line_times.get(oid, "00:00:00") for oid in operators_filtered},
-        "total":     {oid: total_dialogs.get(oid, 0) for oid in operators_filtered},
-        "cs8":       {oid: cs8.get(oid, 0) for oid in operators_filtered},
-        "cs20":      {oid: cs20.get(oid, 0) for oid in operators_filtered},
-        "ag_transfer": {oid: ag_transfer.get(oid, 0) for oid in operators_filtered},
-        "ag_agreement": {oid: ag_agreement.get(oid, 0) for oid in operators_filtered},
-        "inv_ck": dict(ck_metric),
-        "ag_ca": {oid: 0 for oid in operators_filtered},
-        "lead_agent": {oid: lead_agent.get(oid, 0) for oid in operators_filtered},
-        "ck_lead":   ck_metric,
-        "avg":       {oid: avg.get(oid, 0) for oid in operators_filtered},
-        "new":       new_tot,
-        "new_noactive": new_noactive_tot,
-        "server_time": int(time.time() * 1000)
-    }
-    date_for_amo = requested_date or datetime.now(pytz.timezone(AMO_TZ)).strftime("%d-%m-%Y")
-    return jsonify(merge_amo_counts(payload, date_for_amo))
+        ck_metric = {oid: ck_counts.get(oid, 0) for oid in operators_filtered}
+        payload = {
+            "operators": operators_filtered,
+            "status":    {oid: status.get(oid) for oid in operators_filtered},
+            "all":       {oid: allc.get(oid, 0) for oid in operators_filtered},
+            "line":      {oid: line_times.get(oid, "00:00:00") for oid in operators_filtered},
+            "total":     {oid: total_dialogs.get(oid, 0) for oid in operators_filtered},
+            "cs8":       {oid: cs8.get(oid, 0) for oid in operators_filtered},
+            "cs20":      {oid: cs20.get(oid, 0) for oid in operators_filtered},
+            "ag_transfer": {oid: ag_transfer.get(oid, 0) for oid in operators_filtered},
+            "ag_agreement": {oid: ag_agreement.get(oid, 0) for oid in operators_filtered},
+            "inv_ck": dict(ck_metric),
+            "ag_ca": {oid: 0 for oid in operators_filtered},
+            "lead_agent": {oid: lead_agent.get(oid, 0) for oid in operators_filtered},
+            "ck_lead":   ck_metric,
+            "avg":       {oid: avg.get(oid, 0) for oid in operators_filtered},
+            "new":       new_tot,
+            "new_noactive": new_noactive_tot,
+            "server_time": int(time.time() * 1000)
+        }
+        date_for_amo = requested_date or datetime.now(pytz.timezone(AMO_TZ)).strftime("%d-%m-%Y")
+        return jsonify(merge_amo_counts(payload, date_for_amo))
+    except Exception as e:
+        print(f"Stats fallback failed for {requested_date or 'today'}: {e}")
+        return jsonify(empty_stats_payload(server_error=str(e)))
 
 if __name__ == '__main__':
     init_db()

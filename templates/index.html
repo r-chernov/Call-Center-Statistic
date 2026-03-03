@@ -477,6 +477,15 @@
       return api || todayText;
     }
 
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
     function getSelectedDate() {
       const input = document.getElementById('stats-date');
       if (input && input.value) {
@@ -581,10 +590,31 @@
         ? (data.amo_operators || {})
         : (data.operators || {});
 
+      if (data.error && Object.keys(operatorSource).length === 0) {
+        const cols = activeBranch.source !== "amo" ? 12 : activeBranch.columns.length;
+        tbody.innerHTML = `<tr><td class="muted" colspan="${cols}">Ошибка загрузки данных: ${escapeHtml(data.error)}</td></tr>`;
+        return;
+      }
+
       const rows = [];
       Object.entries(operatorSource).forEach(([id, name]) => {
         if (activeBranch.operatorFilter && !activeBranch.operatorFilter(id)) return;
-        const getVal = (obj) => (obj && typeof obj === "object" ? (obj[id] || 0) : 0);
+        const getVal = (obj) => {
+          if (!obj || typeof obj !== "object") return 0;
+          if (Object.prototype.hasOwnProperty.call(obj, id)) {
+            return Number(obj[id]) || 0;
+          }
+          const sid = String(id).trim();
+          if (Object.prototype.hasOwnProperty.call(obj, sid)) {
+            return Number(obj[sid]) || 0;
+          }
+          for (const [k, v] of Object.entries(obj)) {
+            if (String(k).trim() === sid) {
+              return Number(v) || 0;
+            }
+          }
+          return 0;
+        };
         rows.push({
           name,
           all: getVal(data.all),
@@ -596,20 +626,20 @@
             : getVal(data.cs8),
           inv_transfer: getVal(data.cs20),
           inv_agreement: getVal(data.cs8),
-          inv_ck: data.inv_ck?.[id] || 0,
-          ag_transfer: data.ag_transfer?.[id] || 0,
-          ag_agreement: data.ag_agreement?.[id] || 0,
-          ag_ca: data.ag_ca?.[id] || 0,
-          lead_agent: data.lead_agent?.[id] || 0,
-          ck_lead: data.ck_lead?.[id] || 0,
-          avg: data.avg?.[id] || 0,
+          inv_ck: getVal(data.inv_ck),
+          ag_transfer: getVal(data.ag_transfer),
+          ag_agreement: getVal(data.ag_agreement),
+          ag_ca: getVal(data.ag_ca),
+          lead_agent: getVal(data.lead_agent),
+          ck_lead: getVal(data.ck_lead),
+          avg: getVal(data.avg),
           sum_stats:
             getVal(data.cs20)
             + getVal(data.cs8)
-            + (data.inv_ck?.[id] || 0)
-            + (data.ag_transfer?.[id] || 0)
-            + (data.ag_agreement?.[id] || 0)
-            + (data.ag_ca?.[id] || 0),
+            + getVal(data.inv_ck)
+            + getVal(data.ag_transfer)
+            + getVal(data.ag_agreement)
+            + getVal(data.ag_ca),
           calls_1m: (data.amo_calls_1m && data.amo_calls_1m[id]) ? data.amo_calls_1m[id] : 0,
           meetings: (data.amo_meetings && data.amo_meetings[id]) ? data.amo_meetings[id] : 0,
           deals: (data.amo_deals && data.amo_deals[id]) ? data.amo_deals[id] : 0,
@@ -633,6 +663,12 @@
           merged[key].revenue += row.revenue;
         });
         renderRows = Object.values(merged);
+      }
+
+      if (renderRows.length === 0) {
+        const cols = activeBranch.source !== "amo" ? 12 : activeBranch.columns.length;
+        tbody.innerHTML = `<tr><td class="muted" colspan="${cols}">Нет данных за выбранную дату</td></tr>`;
+        return;
       }
 
       const toSeconds = (val) => {
@@ -708,7 +744,15 @@
       const apiDate = toApiDate(selected);
       const url = apiDate ? `/stats?date=${encodeURIComponent(apiDate)}` : '/stats';
       const res = await fetch(url);
-      return res.json();
+      const text = await res.text();
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
+      }
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(`Invalid JSON from /stats: ${text.slice(0, 300)}`);
+      }
     }
 
     async function loadStats() {
