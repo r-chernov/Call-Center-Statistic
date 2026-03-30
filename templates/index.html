@@ -216,7 +216,7 @@
       color: var(--muted);
     }
 
-    .filters input[type="date"]{
+    .filters input{
       appearance: none;
       border: 1px solid rgba(255,255,255,0.18);
       background: rgba(0,0,0,0.28);
@@ -251,6 +251,46 @@
       box-shadow: var(--shadow);
       backdrop-filter: blur(12px);
       overflow:hidden;
+      position: relative;
+    }
+    .statsLoading{
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(5, 18, 36, 0.55);
+      backdrop-filter: blur(2px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s ease;
+      z-index: 20;
+    }
+    .statsLoading.active{
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .statsLoadingCard{
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.24);
+      background: rgba(4, 17, 34, 0.8);
+      color: #f8fbff;
+      font-weight: 700;
+    }
+    .statsSpinner{
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.35);
+      border-top-color: #fff;
+      animation: statsSpin .8s linear infinite;
+    }
+    @keyframes statsSpin{
+      to { transform: rotate(360deg); }
     }
 
     .tableScroll{
@@ -428,12 +468,18 @@
       <h1>Статистика работы КЦ за <span id="title-date">{{ today }}</span></h1>
       <div class="filters">
         <label for="stats-date">Дата:</label>
-        <input id="stats-date" type="date">
+        <input id="stats-date" type="text" inputmode="numeric" placeholder="ДД.ММ.ГГГГ">
         <button id="stats-apply">Показать</button>
       </div>
     </div>
 
     <div class="tableWrap branchSwap" id="branch-swap">
+      <div id="stats-loading" class="statsLoading" aria-live="polite">
+        <div class="statsLoadingCard">
+          <span class="statsSpinner" aria-hidden="true"></span>
+          <span id="stats-loading-text">Загрузка данных...</span>
+        </div>
+      </div>
       <div class="tableHead">
         <div class="left">Статистика операторов</div>
       </div>
@@ -466,10 +512,31 @@
       return `${m[3]}-${m[2]}-${m[1]}`;
     }
 
+    function toDotDate(value) {
+      if (!value) return '';
+      let m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) return `${m[3]}.${m[2]}.${m[1]}`;
+      m = value.match(/^(\d{2})[.\-](\d{2})[.\-](\d{4})$/);
+      if (m) return `${m[1]}.${m[2]}.${m[3]}`;
+      return '';
+    }
+
+    function normalizeIsoDate(value) {
+      if (!value) return '';
+      let m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+      m = value.match(/^(\d{2})[.\-](\d{2})[.\-](\d{4})$/);
+      if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+      return '';
+    }
+
     function toApiDate(value) {
-      const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (!m) return '';
-      return `${m[3]}-${m[2]}-${m[1]}`;
+      if (!value) return '';
+      let m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+      m = value.match(/^(\d{2})[.\-](\d{2})[.\-](\d{4})$/);
+      if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+      return '';
     }
 
     function formatDisplayDate(value) {
@@ -486,13 +553,37 @@
         .replace(/'/g, "&#39;");
     }
 
-    function getSelectedDate() {
+    function getCurrentIsoDate() {
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    let selectedDateIso = '';
+
+    function readInputSelectedDate() {
       const input = document.getElementById('stats-date');
-      if (input && input.value) {
-        return input.value;
+      if (!input) return '';
+      return normalizeIsoDate((input.value || '').trim());
+    }
+
+    function getSelectedDate() {
+      const fromInput = readInputSelectedDate();
+      if (fromInput) {
+        selectedDateIso = fromInput;
+        return fromInput;
       }
-      const fallback = toInputDate(todayText);
-      return fallback || defaultDate;
+      if (selectedDateIso) return selectedDateIso;
+      selectedDateIso = normalizeIsoDate(toInputDate(todayText)) || getCurrentIsoDate();
+      return selectedDateIso;
+    }
+
+    function isTodaySelectedDate(selectedIso = "") {
+      const current = getCurrentIsoDate();
+      const selected = normalizeIsoDate(selectedIso || getSelectedDate());
+      return Boolean(selected) && selected === current;
     }
 
     const branchConfigs = [
@@ -534,6 +625,22 @@
     let lastStatsData = null;
     let statsTimerId = null;
     let statsInFlight = false;
+    let statsReloadQueued = false;
+    const statsLoadingEl = document.getElementById('stats-loading');
+    const statsLoadingTextEl = document.getElementById('stats-loading-text');
+
+    function setStatsLoading(isLoading, selectedIso = "") {
+      if (!statsLoadingEl) return;
+      if (isLoading) {
+        const displayDate = toApiDate(selectedIso || getSelectedDate()) || todayText;
+        if (statsLoadingTextEl) {
+          statsLoadingTextEl.textContent = `Загружаем данные за ${displayDate}...`;
+        }
+        statsLoadingEl.classList.add('active');
+      } else {
+        statsLoadingEl.classList.remove('active');
+      }
+    }
 
     function renderStats(data) {
       if (!data) return;
@@ -739,12 +846,25 @@
       }
     }
 
-    async function fetchStats() {
-      const selected = getSelectedDate();
-      const apiDate = toApiDate(selected);
+    async function fetchStats(selected) {
+      const apiDate = toApiDate(selected || getSelectedDate());
       const url = apiDate ? `/stats?date=${encodeURIComponent(apiDate)}` : '/stats';
-      const res = await fetch(url);
-      const text = await res.text();
+      console.debug('Fetching stats:', url);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
+      let res;
+      let text = "";
+      try {
+        res = await fetch(url, { signal: controller.signal });
+        text = await res.text();
+      } catch (err) {
+        if (err && err.name === 'AbortError') {
+          throw new Error(`Timeout while loading ${url}`);
+        }
+        throw err;
+      } finally {
+        clearTimeout(timeoutId);
+      }
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
       }
@@ -756,33 +876,80 @@
     }
 
     async function loadStats() {
-      if (statsInFlight) return;
+      const selectedAtCall = getSelectedDate();
+      if (statsInFlight) {
+        if (isTodaySelectedDate(selectedAtCall)) {
+          statsReloadQueued = true;
+        }
+        return;
+      }
       statsInFlight = true;
+      setStatsLoading(true, selectedAtCall);
       try {
-        const data = await fetchStats();
+        const data = await fetchStats(selectedAtCall);
         lastStatsData = data;
         renderStats(lastStatsData);
       } finally {
         statsInFlight = false;
+        setStatsLoading(false);
+        if (statsReloadQueued && isTodaySelectedDate()) {
+          statsReloadQueued = false;
+          loadStats().catch(err => console.error('Queued stats load failed:', err));
+        } else {
+          statsReloadQueued = false;
+        }
       }
     }
 
-    const defaultDate = (() => {
-      const d = new Date();
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      return `${yyyy}-${mm}-${dd}`;
-    })();
+    const defaultDate = getCurrentIsoDate();
     const statsDateInput = document.getElementById('stats-date');
     const statsApplyBtn = document.getElementById('stats-apply');
     if (statsDateInput) {
-      statsDateInput.value = toInputDate(todayText) || defaultDate;
+      const initialDate = normalizeIsoDate(toInputDate(todayText)) || defaultDate;
+      selectedDateIso = initialDate;
+      statsDateInput.value = toDotDate(initialDate) || todayText;
+      statsDateInput.addEventListener('input', () => {
+        const normalized = normalizeIsoDate(statsDateInput.value);
+        if (normalized) {
+          selectedDateIso = normalized;
+        }
+      });
+      statsDateInput.addEventListener('change', () => {
+        const normalized = normalizeIsoDate(statsDateInput.value);
+        if (!normalized) return;
+        selectedDateIso = normalized;
+        statsDateInput.value = toDotDate(normalized);
+        loadStats().catch(err => console.error('Stats load on date change failed:', err));
+      });
+      statsDateInput.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        const normalized = normalizeIsoDate(statsDateInput.value);
+        if (normalized) {
+          selectedDateIso = normalized;
+          statsDateInput.value = toDotDate(normalized);
+        }
+        loadStats().catch(err => console.error('Stats load on Enter failed:', err));
+      });
+      statsDateInput.addEventListener('blur', () => {
+        const normalized = normalizeIsoDate(statsDateInput.value);
+        if (!normalized) return;
+        statsDateInput.value = toDotDate(normalized);
+      });
     } else {
       console.warn('stats-date input not found');
     }
     if (statsApplyBtn) {
-      statsApplyBtn.addEventListener('click', loadStats);
+      statsApplyBtn.addEventListener('click', () => {
+        const normalized = readInputSelectedDate();
+        if (normalized) {
+          selectedDateIso = normalized;
+          if (statsDateInput) {
+            statsDateInput.value = toDotDate(normalized);
+          }
+        }
+        loadStats().catch(err => console.error('Stats load on click failed:', err));
+      });
     } else {
       console.warn('stats-apply button not found');
     }
@@ -795,17 +962,9 @@
         console.error('Initial stats load failed:', err);
       }
       statsTimerId = setInterval(() => {
+        if (!isTodaySelectedDate()) return;
         loadStats().catch(err => console.error('Stats refresh failed:', err));
       }, 60000);
-    }
-
-    window.loadStats = loadStats;
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => {
-        scheduleStatsRefresh();
-      }, { once: true });
-    } else {
-      scheduleStatsRefresh();
     }
 
     const branches = branchConfigs.map(item => item.name);
@@ -914,6 +1073,15 @@
         }, 250);
       });
     });
+
+    window.loadStats = loadStats;
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        scheduleStatsRefresh();
+      }, { once: true });
+    } else {
+      scheduleStatsRefresh();
+    }
   </script>
 </body>
 </html>

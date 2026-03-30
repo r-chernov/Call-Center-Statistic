@@ -65,14 +65,15 @@ AMO_STATUS_MEETING_OK = str(os.getenv("AMO_STATUS_MEETING_OK", "79652190"))
 AMO_STATUS_DEAL_SUCCESS = str(os.getenv("AMO_STATUS_DEAL_SUCCESS", "142"))
 AMO_FIELD_MEETING_OK = str(os.getenv("AMO_FIELD_MEETING_OK", "964369"))
 AMO_FIELD_DEAL_SUM = str(os.getenv("AMO_FIELD_DEAL_SUM", "964601"))
+AMO_FIELD_OPERATOR = str(os.getenv("AMO_FIELD_OPERATOR", "913949") or "913949")
 AMO_FIELD_INV_CK = str(os.getenv("AMO_FIELD_INV_CK", "942511"))
-AMO_FIELD_AGENT_CA = str(os.getenv("AMO_FIELD_AGENT_CA", ""))
+AMO_FIELD_AGENT_CA = str(os.getenv("AMO_FIELD_AGENT_CA", "3635769") or "3635769")
 AMO_INV_CK_VALUE = os.getenv("AMO_INV_CK_VALUE", "ЦК")
 AMO_AGENT_CA_VALUE = os.getenv("AMO_AGENT_CA_VALUE", "ЦА")
 AMO_INV_CK_ENUM_ID = str(os.getenv("AMO_INV_CK_ENUM_ID", "")).strip()
 AMO_AGENT_CA_ENUM_ID = str(os.getenv("AMO_AGENT_CA_ENUM_ID", "")).strip()
 AMO_PIPE_INVESTORS_ID = str(os.getenv("AMO_PIPE_INVESTORS_ID", "")).strip()
-AMO_PIPE_AGENTS_ID = str(os.getenv("AMO_PIPE_AGENTS_ID", "")).strip()
+AMO_PIPE_AGENTS_ID = str(os.getenv("AMO_PIPE_AGENTS_ID", "9779410") or "9779410").strip()
 AMO_PIPE_INVESTORS_NAME = os.getenv("AMO_PIPE_INVESTORS_NAME", "Воронка ФС")
 AMO_PIPE_AGENTS_NAME = os.getenv("AMO_PIPE_AGENTS_NAME", "Запросы агентов")
 AMO_DEBUG_EVENTS = os.getenv("AMO_DEBUG_EVENTS", "").lower() in ("1", "true", "yes", "y")
@@ -113,19 +114,65 @@ CS8        = ["8"]
 CS20       = ["20"]
 CS22       = ["22"]
 LEAD_AGENT = ["22","30"]
-AG_TRANSFER = ["36", "20"]
+AG_TRANSFER = ["36"]
 AG_AGREEMENT = ["37", "22"]
 
 def get_talk_duration(call):
-    td = call.get("talk_duration") or 0
+    td = call.get("talk_duration")
+    if td is None:
+        td = call.get("duration")
+    if td is None:
+        td = call.get("billsec")
+    if td is None:
+        td = call.get("answered_seconds")
+    if td is None:
+        return 0
+    if isinstance(td, (int, float)):
+        try:
+            return int(td)
+        except (TypeError, ValueError):
+            return 0
+
+    raw = str(td).strip()
+    if not raw:
+        return 0
+
+    # Форматы времени из SipSpeak встречаются как "MM:SS" и "HH:MM:SS".
+    if ":" in raw:
+        parts = raw.split(":")
+        nums = []
+        for p in parts:
+            p = p.strip().replace(",", ".")
+            try:
+                nums.append(float(p))
+            except (TypeError, ValueError):
+                nums = []
+                break
+        if len(nums) == 2:
+            return int(nums[0] * 60 + nums[1])
+        if len(nums) == 3:
+            return int(nums[0] * 3600 + nums[1] * 60 + nums[2])
+
+    raw = raw.replace(",", ".")
     try:
-        return int(td)
+        return int(float(raw))
     except (TypeError, ValueError):
         return 0
 
 def get_status_id(call):
-    status_obj = call.get("client_status") or {}
-    return str(status_obj.get("id") or "")
+    status_obj = call.get("client_status")
+    if isinstance(status_obj, dict):
+        value = status_obj.get("id") or status_obj.get("value") or status_obj.get("status_id")
+        if value is not None and value != "":
+            return str(value)
+    elif status_obj is not None and status_obj != "":
+        return str(status_obj)
+
+    for key in ("client_status_id", "status_id", "result_status_id"):
+        value = call.get(key)
+        if value is not None and value != "":
+            return str(value)
+    return ""
 
 # для тестирования локально:
 TEST_DATE = os.getenv("TEST_DATE")  # e.g. "14-05-2025"
@@ -272,7 +319,11 @@ def amo_fetch_pipelines():
         return AMO_PIPELINES_CACHE["name_to_id"]
     out = {}
     page = 1
+    seen_pages = set()
     while True:
+        if page in seen_pages:
+            break
+        seen_pages.add(page)
         try:
             r = amo_get("/api/v4/leads/pipelines", params={"limit": 250, "page": page})
         except requests.RequestException as e:
@@ -292,6 +343,9 @@ def amo_fetch_pipelines():
             name = pipe.get("name") or ""
             if pid and name:
                 out[normalize_name(name)] = pid
+        links = data.get("_links") or {}
+        if not links.get("next"):
+            break
         page += 1
     AMO_PIPELINES_CACHE["ts"] = now
     AMO_PIPELINES_CACHE["name_to_id"] = out
@@ -357,6 +411,32 @@ def amo_field_numeric(lead, field_id):
         return int(float(str(value).replace(" ", "").replace(",", ".")))
     except (TypeError, ValueError):
         return 0
+
+def amo_field_text(lead, field_id):
+    field = amo_find_custom_field(lead, field_id)
+    if not field:
+        return ""
+    for item in (field.get("values") or []):
+        value = item.get("value")
+        if value is None:
+            value = item.get("text")
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+def amo_tokens_match(tokens, value_text="", enum_id=""):
+    if not tokens:
+        return False
+    for token in tokens:
+        if enum_id and token.get("enum_id") == enum_id:
+            return True
+        txt = normalize_name(token.get("text", ""))
+        if value_text and txt == value_text:
+            return True
+    return False
 
 def amo_events_call_notes(date_str):
     if not amo_enabled():
@@ -875,7 +955,7 @@ def amo_leads_event_metrics(date_str):
         "revenue": revenue
     }
 
-def amo_ulya_invest_agent_metrics(date_str):
+def amo_ulya_invest_agent_metrics(date_str, operators_override=None):
     if not amo_enabled():
         return {"inv_ck": Counter(), "ag_ca": Counter()}
 
@@ -888,7 +968,8 @@ def amo_ulya_invest_agent_metrics(date_str):
             "field_id": str(AMO_FIELD_AGENT_CA),
             "value_text": normalize_name(AMO_AGENT_CA_VALUE),
             "enum_id": AMO_AGENT_CA_ENUM_ID,
-            "pipeline_id": ag_pipeline_id
+            "pipeline_id": ag_pipeline_id,
+            "use_operator_field": True
         })
     if not field_specs:
         return {"inv_ck": Counter(), "ag_ca": Counter()}
@@ -949,19 +1030,6 @@ def amo_ulya_invest_agent_metrics(date_str):
 
         return "", []
 
-    def is_positive(tokens, spec):
-        if not tokens:
-            return False
-        enum_id = spec.get("enum_id", "")
-        value_text = spec.get("value_text", "")
-        for token in tokens:
-            if enum_id and token.get("enum_id") == enum_id:
-                return True
-            txt = normalize_name(token.get("text", ""))
-            if value_text and txt == value_text:
-                return True
-        return False
-
     def is_lead_event(event):
         entity_type = (event.get("entity_type") or "").lower()
         return entity_type in ("lead", "leads")
@@ -975,7 +1043,6 @@ def amo_ulya_invest_agent_metrics(date_str):
                 ("filter[created_at][from]", start_ts),
                 ("filter[created_at][to]", end_ts),
                 ("filter[type][]", "custom_field_value_changed"),
-                ("filter[type][]", f"custom_field_{spec['field_id']}_value_changed"),
             ]
             try:
                 r = amo_get("/api/v4/events", params=params)
@@ -983,6 +1050,11 @@ def amo_ulya_invest_agent_metrics(date_str):
                 print(f"AMO events request error: {e}")
                 break
             if r.status_code == 204:
+                break
+            if r.status_code == 400:
+                # Некоторые аккаунты amoCRM не поддерживают типы вида custom_field_<id>_value_changed.
+                # Используем только универсальный custom_field_value_changed и фильтруем по field_id в коде.
+                print(f"AMO events HTTP 400 for field {spec['field_id']} ({spec['key']}): {r.text}")
                 break
             if r.status_code != 200:
                 print(f"AMO events HTTP {r.status_code}: {r.text}")
@@ -1003,11 +1075,10 @@ def amo_ulya_invest_agent_metrics(date_str):
                 fid, tokens = extract_change(event)
                 if fid != spec["field_id"]:
                     continue
-                flag = is_positive(tokens, spec)
                 ts = event.get("created_at") or 0
                 prev = latest[spec["key"]].get(lead_id)
                 if not prev or ts >= prev[0]:
-                    latest[spec["key"]][lead_id] = (ts, flag)
+                    latest[spec["key"]][lead_id] = (ts, tokens)
             page += 1
 
     for spec in field_specs:
@@ -1017,6 +1088,20 @@ def amo_ulya_invest_agent_metrics(date_str):
     for spec in field_specs:
         lead_ids |= set(latest[spec["key"]].keys())
     lead_ids = list(lead_ids)
+
+    source_map = operators_override or OPERATORS or {}
+    operators_source = {
+        str(oid): name
+        for oid, name in source_map.items()
+        if str(oid) not in EXCLUDED_OPERATOR_IDS and str(oid) not in MOSCOW_OPERATOR_IDS
+    }
+    if not operators_source:
+        operators_source = {
+            str(oid): name for oid, name in (OPERATORS or {}).items()
+            if str(oid) not in EXCLUDED_OPERATOR_IDS
+        }
+    operator_name_map = build_operator_name_map(operators_source)
+    unknown_operator_names = set()
 
     lead_meta = {}
     for i in range(0, len(lead_ids), 250):
@@ -1040,24 +1125,46 @@ def amo_ulya_invest_agent_metrics(date_str):
             lid = lead.get("id")
             if not lid:
                 continue
+            operator_name = amo_field_text(lead, AMO_FIELD_OPERATOR)
+            operator_id = ""
+            if operator_name:
+                key_full = normalize_name(operator_name)
+                key_short = normalize_name(short_name(operator_name))
+                operator_id = operator_name_map.get(key_full) or operator_name_map.get(key_short) or ""
+                if not operator_id:
+                    unknown_operator_names.add(operator_name)
             lead_meta[lid] = {
                 "responsible": str(lead.get("responsible_user_id") or ""),
-                "pipeline_id": str(lead.get("pipeline_id") or "")
+                "pipeline_id": str(lead.get("pipeline_id") or ""),
+                "operator_id": str(operator_id or "")
             }
 
     result = {"inv_ck": Counter(), "ag_ca": Counter()}
     for spec in field_specs:
         key = spec["key"]
         target_pipeline = spec["pipeline_id"]
-        for lid, (_, flag) in latest[key].items():
-            if not flag:
+        for lid, (_, event_tokens) in latest[key].items():
+            if not amo_tokens_match(
+                event_tokens,
+                value_text=spec.get("value_text", ""),
+                enum_id=spec.get("enum_id", "")
+            ):
                 continue
             meta = lead_meta.get(lid, {})
             if target_pipeline and str(meta.get("pipeline_id") or "") != str(target_pipeline):
                 continue
-            rid = str(meta.get("responsible") or "") or created_by_map.get(lid, "")
+            if spec.get("use_operator_field"):
+                rid = str(meta.get("operator_id") or "")
+                if not rid:
+                    rid = str(meta.get("responsible") or "") or created_by_map.get(lid, "")
+            else:
+                rid = str(meta.get("responsible") or "") or created_by_map.get(lid, "")
             if rid:
                 result[key][rid] += 1
+
+    if unknown_operator_names:
+        print(f"AMO ЦА: operator name not mapped: {', '.join(sorted(unknown_operator_names))}")
+    print(f"AMO ULYA {date_str}: ag_ca={dict(result['ag_ca'])}")
 
     return result
 
@@ -1132,7 +1239,7 @@ def merge_amo_counts(payload, date_str):
     if not amo_enabled():
         return payload
     amo_metrics = amo_leads_event_metrics(date_str)
-    ulya_amo = amo_ulya_invest_agent_metrics(date_str)
+    ulya_amo = amo_ulya_invest_agent_metrics(date_str, operators_override=payload.get("operators") or OPERATORS)
     amo_calls_1m = amo_calls_over_minute(date_str)
     if not amo_metrics or not (amo_metrics["success"] or amo_metrics["agreement"] or amo_metrics["meeting"] or amo_metrics["revenue"]):
         payload["amo_deals"] = {}
@@ -2328,7 +2435,7 @@ def sync_day(date_str):
         try:
             amo_metrics = amo_leads_event_metrics(date_str)
             amo_calls_1m = amo_calls_over_minute(date_str)
-            ulya_amo = amo_ulya_invest_agent_metrics(date_str)
+            ulya_amo = amo_ulya_invest_agent_metrics(date_str, operators_override=operators_map)
             amo_users = amo_fetch_users()
         except Exception as e:
             print(f"AMO sync failed for {date_str}: {e}")
@@ -3071,34 +3178,10 @@ def stats():
         return payload
 
     requested_date = request.args.get("date")
+    print(f"Stats request args={dict(request.args)}")
+    print(f"Stats request date={requested_date or 'today'}")
     if requested_date:
         today = datetime.now(pytz.timezone("Europe/Samara")).strftime("%d-%m-%Y")
-        if has_date_in_db(requested_date):
-            cached = get_day_stats_from_db(requested_date)
-            has_data = has_nonzero_stats_for_date(requested_date)
-            is_empty_day = requested_date in set(list_empty_dates())
-            if requested_date != today and not is_empty_day:
-                try:
-                    sync_day(requested_date)
-                    refreshed = get_day_stats_from_db(requested_date)
-                    if refreshed:
-                        return jsonify(refreshed)
-                except Exception as e:
-                    print(f"Historical sync failed for {requested_date}: {e}")
-                    if cached and has_data:
-                        return jsonify(cached)
-            try:
-                fetch_operators()
-                update_ck_lead_from_sheet(requested_date, OPERATORS)
-            except Exception as e:
-                print(f"Fast cache refresh failed for {requested_date}: {e}")
-            cached = get_day_stats_from_db(requested_date)
-            has_data = has_nonzero_stats_for_date(requested_date)
-            is_empty_day = requested_date in set(list_empty_dates())
-            if cached and (has_data or is_empty_day or requested_date == today):
-                if requested_date == today:
-                    trigger_background_sync(requested_date)
-                return jsonify(cached)
         if requested_date == today:
             trigger_background_sync(requested_date)
             cached = get_day_stats_from_db(requested_date)
@@ -3113,13 +3196,22 @@ def stats():
             if cached:
                 return jsonify(cached)
             return jsonify(empty_stats_payload(server_error="Нет данных после синхронизации"))
+
+        # Прошедшие даты не пересинхронизируем на каждый запрос дашборда:
+        # возвращаем срез из БД, а ручной пересинк остаётся через админку.
+        cached = get_day_stats_from_db(requested_date)
+        if cached:
+            return jsonify(cached)
+
         try:
             sync_day(requested_date)
         except Exception as e:
             print(f"Stats sync failed for {requested_date}: {e}")
+            return jsonify(empty_stats_payload(server_error=str(e)))
         cached = get_day_stats_from_db(requested_date)
         if cached:
             return jsonify(cached)
+        return jsonify(empty_stats_payload(server_error=f"Нет данных за {requested_date}"))
     try:
         fetch_operators()
         calls   = fetch_all_calls_details(requested_date=requested_date, operators_map=OPERATORS)
